@@ -1,0 +1,111 @@
+/* 全局样式 */
+:root {
+  --primary-color: #667eea;
+  --primary-dark: #764ba2;
+  --success-color: #67C23A;
+  --warning-color: #E6A23C;
+  --danger-color: #F56C6C;
+  --info-color: #909399;
+  
+  --text-primary: #303133;
+  --text-regular: #606266;
+  --text-secondary: #909399;
+  
+  --bg-color: #f5f7fa;
+  --border-color: #dcdfe6;
+  
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+}
+
+body {
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  background: var(--bg-color);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 平板触摸优化 */
+@media (max-width: 1024px) {
+  /* 增大触摸目标 */
+  .el-button {
+    min-height: 44px;
+    padding: 12px 20px;
+  }
+  
+  .el-input__inner {
+    min-height: 44px;
+  }
+  
+  .el-checkbox__inner {
+    width: 20px;
+    height: 20px;
+  }
+  
+  .el-radio__inner {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #909399;
+}
+
+/* 全局动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* Element Plus 覆盖 */
+.el-card {
+  border: none;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.el-divider__text {
+  background: #fff;
+}
+
+/* 打印样式 */
+@media print {
+  body {
+    background: #fff;
+  }
+  
+  .no-print {
+    display: none !important;
+  }
+}
