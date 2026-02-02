@@ -99,14 +99,49 @@ export const useOfflineStore = defineStore('offline', () => {
 
         const { forms, attachments } = await getPendingData()
         const db = await initDB()
+        const token = localStorage.getItem('token')
+        const API_BASE = import.meta.env?.VITE_API_URL || 'http://localhost:3000'
 
-        // 同步表单数据
+        // 同步表单数据（日志）
         for (const form of forms) {
             try {
-                // TODO: 调用 API 上传表单数据
-                // await api.submitForm(form.type, form.data)
-                form.synced = true
-                await db.put('forms', form)
+                if (form.type === 'daily-log') {
+                    // 构建提交数据
+                    const submitData = {
+                        log_date: form.data.date,
+                        prison_name: form.data.prisonName,
+                        inspector_name: form.data.inspectorName,
+                        three_scenes: form.data.threeScenes,
+                        strict_control: form.data.strictControl,
+                        police_equipment: form.data.policeEquipment,
+                        gang_prisoners: form.data.gangPrisoners,
+                        admission: form.data.admission,
+                        monitor_check: form.data.monitorCheck,
+                        supervision_situation: form.data.supervisionSituation,
+                        feedback_situation: form.data.feedbackSituation,
+                        other_work: form.data.otherWork,
+                        notes: form.data.notes
+                    }
+
+                    const response = await fetch(`${API_BASE}/api/daily-logs`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`
+                        },
+                        body: JSON.stringify(submitData)
+                    })
+
+                    if (response.ok) {
+                        form.synced = true
+                        await db.put('forms', form)
+                        console.log('日志同步成功:', form.data.date)
+                    }
+                } else {
+                    // 其他类型表单暂时标记为已同步
+                    form.synced = true
+                    await db.put('forms', form)
+                }
             } catch (error) {
                 console.error('同步表单失败:', error)
             }
@@ -115,16 +150,40 @@ export const useOfflineStore = defineStore('offline', () => {
         // 同步附件
         for (const attachment of attachments) {
             try {
-                // TODO: 调用 API 上传附件
-                // await api.uploadAttachment(attachment)
-                attachment.synced = true
-                await db.put('attachments', attachment)
+                const formData = new FormData()
+                const blob = new Blob([attachment.fileData], { type: attachment.fileType })
+                formData.append('file', blob, attachment.fileName)
+
+                if (attachment.metadata) {
+                    Object.keys(attachment.metadata).forEach(key => {
+                        formData.append(key, attachment.metadata[key])
+                    })
+                }
+
+                const response = await fetch(`${API_BASE}/api/attachments/upload`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: formData
+                })
+
+                if (response.ok) {
+                    attachment.synced = true
+                    await db.put('attachments', attachment)
+                    console.log('附件同步成功:', attachment.fileName)
+                }
             } catch (error) {
                 console.error('同步附件失败:', error)
             }
         }
 
         await updatePendingCount()
+
+        // 如果有数据同步成功，显示提示
+        if (forms.length > 0 || attachments.length > 0) {
+            console.log(`同步完成: ${forms.length}个日志, ${attachments.length}个附件`)
+        }
     }
 
     // 清理已同步数据

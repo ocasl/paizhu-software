@@ -1,18 +1,24 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
+import { fileURLToPath, URL } from 'node:url'
 
 // https://vite.dev/config/
 export default defineConfig({
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url))
+    }
+  },
   plugins: [
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'robots.txt'],
       manifest: {
-        name: '派驻检察室工作管理系统',
-        short_name: '派驻检察',
-        description: '派驻检察室日常工作管理与月度报告生成系统',
+        name: '智慧派驻检察系统',
+        short_name: '智慧派驻检察',
+        description: '智慧派驻检察室日常工作管理与月度报告生成系统',
         theme_color: '#409EFF',
         background_color: '#ffffff',
         display: 'standalone',

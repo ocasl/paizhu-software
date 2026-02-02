@@ -30,11 +30,6 @@ pnpm-debug.log*
 Thumbs.db
 Desktop.ini
 
-# Environment files
-.env
-.env.local
-.env.*.local
-
 # Cache
 .cache/
 .temp/
@@ -51,3 +46,9 @@ env/
 
 # Gemini Agent
 .gemini/
+
+# Uploads (user uploaded files)
+backend/uploads/
+
+# Documentation (local documentation files)
+文档/
