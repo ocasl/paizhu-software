@@ -52,3 +52,10 @@ backend/uploads/
 
 # Documentation (local documentation files)
 文档/
+
+# Archive files (压缩包文件)
+*.rar
+*.zip
+*.7z
+*.tar.gz
+*.tar
