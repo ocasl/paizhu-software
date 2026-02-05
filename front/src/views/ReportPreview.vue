@@ -4,7 +4,6 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { 
   Document, 
   Download, 
-  Printer, 
   Edit, 
   Check, 
   Warning,
@@ -32,6 +31,10 @@ const selectedMonth = ref('')
 function onPrisonChange(prison) {
   selectedPrison.value = prison
   console.log('监狱切换:', prison)
+  
+  // 更新报告标题中的监狱名称
+  reportStore.prisonInfo.prisonName = prison
+  
   if (selectedMonth.value) {
     loadMonthData()
   }
@@ -64,7 +67,7 @@ async function loadMonthData() {
     const startDate = `${year}-${month}-01`
     const endDate = new Date(parseInt(year), parseInt(month), 0).toISOString().split('T')[0]
     
-    ElMessage.info(`正在加载 ${year}年${month}月 的数据...`)
+    // ElMessage.info(`正在加载 ${year}年${month}月 的数据...`)  // 已移除提示
     
     // 构建查询参数
     const params = { startDate, endDate }
@@ -90,17 +93,20 @@ async function loadMonthData() {
       })
     ]
     
-    // 只有选择了监狱才加载基本信息
+    // 只有选择了监狱才加载基本信息和信件统计
     if (selectedPrison.value) {
       promises.push(
         fetch(`${API_BASE}/api/monthly-basic-info/${selectedMonth.value}?prison_name=${selectedPrison.value}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }),
+        fetch(`${API_BASE}/api/template-sync/mail-stats/${selectedMonth.value}?prison_name=${selectedPrison.value}`, {
           headers: { 'Authorization': `Bearer ${token}` }
         })
       )
     }
     
     const responses = await Promise.all(promises)
-    const [dailyRes, weeklyRes, monthlyRes, immediateRes, basicInfoRes] = responses
+    const [dailyRes, weeklyRes, monthlyRes, immediateRes, basicInfoRes, mailStatsRes] = responses
     
     // 检查响应状态（允许基本信息为空或404）
     if (dailyRes.ok && weeklyRes.ok && monthlyRes.ok && immediateRes.ok && (!basicInfoRes || basicInfoRes.ok || basicInfoRes.status === 404)) {
@@ -119,16 +125,21 @@ async function loadMonthData() {
         return
       }
       
-      // 处理基本信息（可能是404）
+      // 处理基本信息（可能是404或undefined）
       let basicInfoData = null
-      if (basicInfoRes.ok) {
-        basicInfoData = await basicInfoRes.json()
-      } else if (basicInfoRes.status === 404) {
-        // 该月份没有数据，创建空记录
-        console.log(`${selectedMonth.value} 月份没有基本信息数据，将显示为空`)
-        basicInfoData = { success: true, data: null }
+      if (basicInfoRes) {
+        if (basicInfoRes.ok) {
+          basicInfoData = await basicInfoRes.json()
+        } else if (basicInfoRes.status === 404) {
+          // 该月份没有数据，创建空记录
+          console.log(`${selectedMonth.value} 月份没有基本信息数据，将显示为空`)
+          basicInfoData = { success: true, data: null }
+        } else {
+          throw new Error('获取基本信息失败')
+        }
       } else {
-        throw new Error('获取基本信息失败')
+        // 没有选择监狱，不加载基本信息
+        basicInfoData = { success: true, data: null }
       }
       
       console.log('加载的数据:', {
@@ -139,15 +150,35 @@ async function loadMonthData() {
         basicInfo: basicInfoData.data ? '有数据' : '无数据'
       })
       
+      console.log('基本信息详情:', basicInfoData.data)
+      
+      // 处理信件统计（如果有）
+      let mailStatsData = null
+      if (mailStatsRes) {
+        if (mailStatsRes.ok) {
+          mailStatsData = await mailStatsRes.json()
+          console.log('信件统计:', mailStatsData.data)
+        }
+      }
+      
       // 更新 reportStore
       reportStore.dailyLogs = dailyData.data || []
       reportStore.weeklyRecords = weeklyData.data || []
       reportStore.monthlyRecords = monthlyData.data || []
       reportStore.immediateEvents = immediateData.data || []
       
+      // 🔥 使用专门的方法设置信件数量，避免被 watch 覆盖
+      if (mailStatsData && mailStatsData.data) {
+        // 先等待 watch 执行完
+        await new Promise(resolve => setTimeout(resolve, 100))
+        // 使用专门的方法设置
+        reportStore.setMailCount(mailStatsData.data.mailCount || 0)
+      }
+      
       // 更新基本信息（如果有数据）
       if (basicInfoData.data) {
         const info = basicInfoData.data
+        console.log('准备更新 basicInfo，total_prisoners =', info.total_prisoners)
         Object.assign(reportStore.basicInfo, {
           totalPrisoners: info.total_prisoners || 0,
           majorCriminals: info.major_criminals || 0,
@@ -171,8 +202,10 @@ async function loadMonthData() {
           recordedPunishments: info.recorded_punishments || 0,
           recordedPunishmentsReason: info.recorded_punishments_reason || '',
           confinementPunishments: info.confinement_punishments || 0,
-          confinementReason: info.confinement_reason || ''
+          confinementReason: info.confinement_reason || '',
+          lettersReceived: info.letters_received || 0  // 🔥 从数据库读取信件数量
         })
+        console.log('basicInfo 已更新，totalPrisoners =', reportStore.basicInfo.totalPrisoners)
       } else {
         // 没有数据，重置为0
         Object.assign(reportStore.basicInfo, {
@@ -207,7 +240,7 @@ async function loadMonthData() {
         reportStore.setCurrentMonth(selectedMonth.value)
       }
       
-      ElMessage.success(`已加载 ${year}年${month}月 的数据 (日:${dailyData.data?.length || 0}, 周:${weeklyData.data?.length || 0}, 月:${monthlyData.data?.length || 0}, 及时:${immediateData.data?.length || 0})`)
+      // ElMessage.success(`已加载 ${year}年${month}月 的数据 (日:${dailyData.data?.length || 0}, 周:${weeklyData.data?.length || 0}, 月:${monthlyData.data?.length || 0}, 及时:${immediateData.data?.length || 0})`)  // 已移除提示
     } else {
       throw new Error('加载数据失败')
     }
@@ -233,6 +266,132 @@ const reportStatus = computed(() => {
 
 // 编辑模式
 const isEditing = ref(false)
+const originalBasicInfo = ref(null) // 保存原始数据，用于取消编辑
+
+// 切换编辑模式
+function toggleEdit() {
+  if (!isEditing.value) {
+    // 进入编辑模式，保存原始数据
+    originalBasicInfo.value = JSON.parse(JSON.stringify(reportStore.basicInfo))
+    isEditing.value = true
+  } else {
+    // 取消编辑，恢复原始数据
+    if (originalBasicInfo.value) {
+      Object.assign(reportStore.basicInfo, originalBasicInfo.value)
+    }
+    isEditing.value = false
+    originalBasicInfo.value = null
+  }
+}
+
+// 保存基本信息到数据库
+async function saveBasicInfo() {
+  if (!selectedMonth.value) {
+    ElMessage.warning('请先选择月份')
+    return
+  }
+  
+  if (!selectedPrison.value) {
+    ElMessage.warning('请先选择监狱')
+    return
+  }
+  
+  try {
+    console.log('=== 开始保存基本信息 ===')
+    console.log('监狱:', selectedPrison.value)
+    console.log('月份:', selectedMonth.value)
+    
+    const token = localStorage.getItem('token')
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    
+    const requestBody = {
+      report_month: selectedMonth.value,
+      prison_name: selectedPrison.value,
+      // 罪犯构成（19个）
+      total_prisoners: reportStore.basicInfo.totalPrisoners,
+      major_criminals: reportStore.basicInfo.majorCriminals,
+      death_sentence: reportStore.basicInfo.deathSentence,
+      life_sentence: reportStore.basicInfo.lifeSentence,
+      repeat_offenders: reportStore.basicInfo.repeatOffenders,
+      foreign_prisoners: reportStore.basicInfo.foreignPrisoners,
+      hk_macao_taiwan: reportStore.basicInfo.hkMacaoTaiwan,
+      mental_illness: reportStore.basicInfo.mentalIllness,
+      former_officials: reportStore.basicInfo.formerOfficials,
+      former_county_level: reportStore.basicInfo.formerCountyLevel,
+      falun_gong: reportStore.basicInfo.falunGong,
+      drug_history: reportStore.basicInfo.drugHistory,
+      drug_crimes: reportStore.basicInfo.drugCrimes,
+      new_admissions: reportStore.basicInfo.newAdmissions,
+      minor_females: reportStore.basicInfo.minorFemales,
+      gang_related: reportStore.basicInfo.gangRelated,
+      evil_forces: reportStore.basicInfo.evilForces,
+      endangering_safety: reportStore.basicInfo.endangeringSafety,
+      released_count: reportStore.basicInfo.releasedCount,
+      // 违纪统计（4个）
+      recorded_punishments: reportStore.basicInfo.recordedPunishments,
+      recorded_punishments_reason: reportStore.basicInfo.recordedPunishmentsReason,
+      confinement_punishments: reportStore.basicInfo.confinementPunishments,
+      confinement_reason: reportStore.basicInfo.confinementReason,
+      // 信件统计（1个）
+      letters_received: reportStore.basicInfo.lettersReceived,
+      // 执法检察情况（9个）
+      parole_batch: reportStore.lawEnforcement.paroleBatch,
+      parole_count: reportStore.lawEnforcement.paroleCount,
+      parole_stage: reportStore.lawEnforcement.paroleStage,
+      correction_notices: reportStore.lawEnforcement.correctionNotices,
+      correction_issues: reportStore.lawEnforcement.correctionIssues,
+      three_scene_checks: reportStore.lawEnforcement.threeSceneChecks,
+      key_location_checks: reportStore.lawEnforcement.keyLocationChecks,
+      visit_checks: reportStore.lawEnforcement.visitChecks,
+      visit_illegal_count: reportStore.lawEnforcement.visitIllegalCount,
+      // 安全防范检察（2个）
+      monitor_checks: reportStore.security.monitorChecks,
+      issues_found: reportStore.security.issuesFound,
+      // 个别谈话（6个）
+      total_talks: reportStore.interviews.totalTalks,
+      new_admission_talks: reportStore.interviews.newAdmissionTalks,
+      evil_forces_talks: reportStore.interviews.evilForcesTalks,
+      injury_talks: reportStore.interviews.injuryTalks,
+      confinement_talks: reportStore.interviews.confinementTalks,
+      questionnaire_count: reportStore.interviews.questionnaireCount,
+      // 会议活动（3个）
+      life_sentence_reviews: reportStore.meetings.lifeSentenceReviews,
+      analysis_meetings: reportStore.meetings.analysisMeetings,
+      other_activities: reportStore.meetings.otherActivities,
+      // 其他工作（1个）
+      mailbox_opens: reportStore.otherWork.mailboxOpens
+    }
+    
+    console.log('请求体:', requestBody)
+    
+    const response = await fetch(`${API_BASE}/api/monthly-basic-info`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify(requestBody)
+    })
+    
+    console.log('响应状态:', response.status)
+    
+    if (!response.ok) {
+      const errorData = await response.json()
+      console.error('保存失败:', errorData)
+      throw new Error(errorData.error || '保存失败')
+    }
+    
+    const result = await response.json()
+    console.log('保存成功:', result)
+    ElMessage.success('基本信息已保存到数据库')
+    isEditing.value = false
+    originalBasicInfo.value = null
+    console.log('=== 保存完成 ===')
+  } catch (error) {
+    console.error('保存基本信息失败:', error)
+    ElMessage.error('保存失败: ' + error.message)
+  }
+}
 
 // 下载中状态
 const isDownloading = ref(false)
@@ -303,11 +462,6 @@ async function downloadReport() {
   } finally {
     isDownloading.value = false
   }
-}
-
-// 打印报告
-function printReport() {
-  window.print()
 }
 
 // 一键归档
@@ -427,8 +581,11 @@ const paroleStageOptions = [
       
       <div class="action-buttons">
         <el-button :icon="Refresh" @click="loadMonthData" title="重新加载数据">刷新</el-button>
-        <el-button :icon="Edit" @click="isEditing = !isEditing">
-          {{ isEditing ? '完成编辑' : '编辑数据' }}
+        <el-button :icon="Edit" @click="toggleEdit">
+          {{ isEditing ? '取消编辑' : '编辑数据' }}
+        </el-button>
+        <el-button v-if="isEditing" type="primary" @click="saveBasicInfo">
+          💾 保存编辑
         </el-button>
         <el-button type="primary" :icon="Check" @click="generateReport">检查完整性</el-button>
         <el-button 
@@ -439,7 +596,6 @@ const paroleStageOptions = [
         >
           下载 Word
         </el-button>
-        <el-button :icon="Printer" @click="printReport">打印</el-button>
         <el-button 
           :icon="Folder" 
           :loading="isArchiving"
@@ -758,8 +914,8 @@ const paroleStageOptions = [
             <span v-else>{{ reportStore.otherWork.mailboxOpens }}</span> 次
           </p>
           <p>收到信件：
-            <el-input-number v-if="isEditing" v-model="reportStore.otherWork.lettersReceived" :min="0" size="small" style="width: 80px" />
-            <span v-else>{{ reportStore.otherWork.lettersReceived }}</span> 封
+            <el-input-number v-if="isEditing" v-model="reportStore.basicInfo.lettersReceived" :min="0" size="small" style="width: 80px" />
+            <span v-else>{{ reportStore.basicInfo.lettersReceived }}</span> 封
           </p>
         </section>
 

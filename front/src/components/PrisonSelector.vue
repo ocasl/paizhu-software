@@ -26,6 +26,10 @@ const props = defineProps({
   width: {
     type: String,
     default: '200px'
+  },
+  autoSelect: {
+    type: Boolean,
+    default: true  // 默认自动选择第一个监狱
   }
 })
 
@@ -99,8 +103,8 @@ async function loadAllPrisons() {
 onMounted(async () => {
   await loadAllPrisons()
   
-  // 如果没有选中监狱，自动选择第一个
-  if (!selectedPrison.value && prisons.value.length > 0) {
+  // 如果没有选中监狱，且 autoSelect 为 true，自动选择第一个
+  if (props.autoSelect && !selectedPrison.value && prisons.value.length > 0) {
     selectedPrison.value = prisons.value[0]
     emit('update:modelValue', selectedPrison.value)
     emit('change', selectedPrison.value)

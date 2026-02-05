@@ -76,13 +76,14 @@ const upload = multer({
  */
 router.post('/upload', upload.array('files', 10), async (req, res) => {
     try {
-        const { category, related_log_id, related_log_type, log_date } = req.body
+        const { category, related_log_id, related_log_type, log_date, upload_month } = req.body
         const files = req.files
 
         // 调试日志
         console.log('📎 上传附件请求:')
         console.log('  category:', category)
         console.log('  log_date:', log_date)
+        console.log('  upload_month:', upload_month)
         console.log('  related_log_id:', related_log_id)
         console.log('  related_log_type:', related_log_type)
 
@@ -91,7 +92,8 @@ router.post('/upload', upload.array('files', 10), async (req, res) => {
         }
 
         const attachments = []
-        const uploadMonth = new Date().toISOString().slice(0, 7)
+        // 使用前端传递的 upload_month，如果没有则使用当前月份
+        const uploadMonth = upload_month || new Date().toISOString().slice(0, 7)
         
         // 使用日志记录日期（如果提供），否则使用当前日期
         const dateToUse = log_date || new Date().toISOString().split('T')[0]

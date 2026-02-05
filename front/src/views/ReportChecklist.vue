@@ -32,6 +32,9 @@ function onPrisonChange(prison) {
   console.log('新监狱:', prison)
   selectedPrison.value = prison
   
+  // 更新报告标题中的监狱名称
+  reportStore.prisonInfo.prisonName = prison
+  
   if (currentMonth.value) {
     console.log('当前月份:', currentMonth.value, '开始加载数据...')
     loadChecklistData()
@@ -379,6 +382,9 @@ const checklistItems = [
 // 清单数据（响应式）
 const checklist = ref([])
 
+// 表格刷新 key
+const tableKey = ref(0)
+
 // 当前编辑的项目
 const editingItem = ref(null)
 const editDialog = ref(false)
@@ -392,6 +398,7 @@ const prisonName = ref('')
 
 // 组件挂载时初始化
 onMounted(() => {
+  console.log('=== 组件挂载 ===')
   const now = new Date()
   currentMonth.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   
@@ -399,12 +406,19 @@ onMounted(() => {
   if (userStore.isOfficer) {
     const user = JSON.parse(localStorage.getItem('user') || '{}')
     selectedPrison.value = user.prison_name || user.prisonName || ''
+    console.log('检察官自动选择监狱:', selectedPrison.value)
   }
   
   loadSettings()
   initChecklist()
-  syncFromStore()
-  loadChecklistData()
+  
+  // 先初始化清单，再加载数据
+  console.log('初始化完成，准备加载数据')
+  
+  // 延迟加载，确保所有初始化完成
+  setTimeout(() => {
+    loadChecklistData()
+  }, 100)
 })
 
 // 加载设置
@@ -445,8 +459,10 @@ function initChecklist() {
 }
 
 // 从 store 同步数据（简化版本，直接使用 newChecklist）
-function syncFromStore() {
-  console.log('开始同步清单数据')
+async function syncFromStore() {
+  console.log('=== 开始同步清单数据 ===')
+  console.log('当前监狱:', selectedPrison.value)
+  console.log('当前月份:', currentMonth.value)
   
   // 创建新的清单数组
   const newChecklist = checklistItems.map(item => ({ 
@@ -461,8 +477,16 @@ function syncFromStore() {
   const monthlyRecords = reportStore.monthlyRecords || []
   const immediateEvents = reportStore.immediateEvents || []
   
+  console.log('Store数据统计:', {
+    daily: dailyLogs.length,
+    weekly: weeklyRecords.length,
+    monthly: monthlyRecords.length,
+    immediate: immediateEvents.length
+  })
+  
   // 同步日检察 - 监控抽查
   const monitorChecks = dailyLogs.filter(log => log.monitorCheck?.checked)
+  console.log('监控抽查记录数:', monitorChecks.length)
   if (monitorChecks.length > 0) {
     const item = newChecklist.find(i => i.id === 7)
     if (item) {
@@ -470,51 +494,110 @@ function syncFromStore() {
       item.content = `本月共抽查监控 ${totalCount} 次`
       item.situation = '未发现异常'
       item.checkTime = '每日'
+      console.log('已更新项目7:', item.content)
     }
   }
   
   // 同步周检察
   if (weeklyRecords.length > 0) {
+    console.log('周检察记录数:', weeklyRecords.length)
+    
     // 8. 医院禁闭室检察
     const hospitalRecords = weeklyRecords.filter(r => r.hospital_check?.checked)
+    console.log('医院检察记录数:', hospitalRecords.length)
     if (hospitalRecords.length > 0) {
       const item = newChecklist.find(i => i.id === 8)
       if (item) {
         item.content = `本月检察 ${hospitalRecords.length} 次`
         item.situation = '未发现异常'
+        console.log('已更新项目8:', item.content)
       }
     }
     
     // 10. 谈话记录
     const talkRecords = weeklyRecords.filter(r => r.talk_records && r.talk_records.length > 0)
+    console.log('谈话记录数:', talkRecords.length)
     if (talkRecords.length > 0) {
       const item = newChecklist.find(i => i.id === 10)
       if (item) {
         const totalTalks = talkRecords.reduce((sum, r) => sum + (r.talk_records?.length || 0), 0)
         item.content = `本月谈话 ${totalTalks} 人次`
         item.situation = '已完成'
+        console.log('已更新项目10:', item.content)
       }
     }
   }
   
   // 同步月检察
   if (monthlyRecords.length > 0) {
+    console.log('月检察记录数:', monthlyRecords.length)
+    
     // 13. 会见场所检察
     const visitRecords = monthlyRecords.filter(r => r.visit_check?.checked)
+    console.log('会见场所检察记录数:', visitRecords.length)
     if (visitRecords.length > 0) {
       const item = newChecklist.find(i => i.id === 13)
       if (item) {
         const totalVisits = visitRecords.reduce((sum, r) => sum + (r.visit_check?.visitCount || 0), 0)
         item.content = `本月检察 ${totalVisits} 次`
         item.situation = '未发现问题'
+        console.log('已更新项目13:', item.content)
       }
     }
   }
   
-  // 最后统一赋值，触发响应式更新
-  checklist.value = newChecklist
+  // 从数据库加载用户的手动编辑
+  if (currentMonth.value && selectedPrison.value) {
+    try {
+      const [year, month] = currentMonth.value.split('-')
+      const token = localStorage.getItem('token')
+      const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+      
+      const response = await fetch(
+        `${API_BASE}/api/checklist-items?prison_name=${selectedPrison.value}&year=${year}&month=${month}`,
+        {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }
+      )
+      
+      if (response.ok) {
+        const result = await response.json()
+        const savedItems = result.data || []
+        console.log('从数据库加载了', savedItems.length, '条用户编辑')
+        
+        // 用数据库中的数据覆盖自动生成的数据
+        savedItems.forEach(saved => {
+          const item = newChecklist.find(i => i.id === saved.item_id)
+          if (item) {
+            // 只有用户手动编辑过的才覆盖
+            if (saved.content || saved.situation) {
+              item.content = saved.content || item.content
+              item.situation = saved.situation || item.situation
+              item.checkTime = saved.check_time || item.checkTime
+              console.log(`项目${saved.item_id}使用数据库数据:`, item.content)
+            }
+          }
+        })
+      }
+    } catch (error) {
+      console.error('加载用户编辑失败:', error)
+    }
+  }
   
-  console.log('清单同步完成，有内容的项数:', checklist.value.filter(i => i.content).length)
+  // 最后统一赋值，触发响应式更新
+  console.log('准备更新 checklist.value，新数据有内容的项数:', newChecklist.filter(i => i.content).length)
+  
+  // 先清空再赋值，确保 Vue 检测到变化
+  checklist.value = []
+  
+  // 使用 nextTick 确保 DOM 更新
+  setTimeout(() => {
+    checklist.value = newChecklist
+    tableKey.value++ // 强制刷新表格
+    console.log('checklist.value 已更新，当前有内容的项数:', checklist.value.filter(i => i.content).length)
+    console.log('表格 key 已更新:', tableKey.value)
+    console.log('=== 清单同步完成 ===')
+  }, 0)
 }
 
 // 格式化日期
@@ -533,14 +616,76 @@ function openEdit(item) {
 }
 
 // 保存编辑
-function saveEdit() {
+async function saveEdit() {
   if (editingItem.value) {
-    editingItem.value.content = editForm.content
-    editingItem.value.situation = editForm.situation
-    if (!editingItem.value.checkTime) {
-      editingItem.value.checkTime = formatDate(new Date().toISOString())
+    try {
+      console.log('=== 开始保存清单项目 ===')
+      console.log('当前监狱:', selectedPrison.value)
+      console.log('当前月份:', currentMonth.value)
+      console.log('项目ID:', editingItem.value.id)
+      console.log('内容:', editForm.content)
+      console.log('情况:', editForm.situation)
+      
+      if (!selectedPrison.value) {
+        ElMessage.error('请先选择监狱')
+        return
+      }
+      
+      if (!currentMonth.value) {
+        ElMessage.error('请先选择月份')
+        return
+      }
+      
+      const [year, month] = currentMonth.value.split('-')
+      const token = localStorage.getItem('token')
+      const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+      
+      const requestBody = {
+        prison_name: selectedPrison.value,
+        year: parseInt(year),
+        month: parseInt(month),
+        item_id: editingItem.value.id,
+        content: editForm.content,
+        situation: editForm.situation,
+        check_time: editingItem.value.checkTime || formatDate(new Date().toISOString())
+      }
+      
+      console.log('请求体:', requestBody)
+      
+      // 保存到数据库
+      const response = await fetch(`${API_BASE}/api/checklist-items`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(requestBody)
+      })
+      
+      console.log('响应状态:', response.status)
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        console.error('保存失败，错误信息:', errorData)
+        throw new Error(errorData.message || '保存失败')
+      }
+      
+      const result = await response.json()
+      console.log('保存成功，返回:', result)
+      
+      // 更新本地数据
+      editingItem.value.content = editForm.content
+      editingItem.value.situation = editForm.situation
+      if (!editingItem.value.checkTime) {
+        editingItem.value.checkTime = formatDate(new Date().toISOString())
+      }
+      
+      ElMessage.success('保存成功')
+      console.log('=== 保存完成 ===')
+    } catch (error) {
+      console.error('保存失败:', error)
+      ElMessage.error('保存失败: ' + error.message)
     }
-    ElMessage.success('保存成功')
   }
   editDialog.value = false
 }
@@ -717,7 +862,7 @@ function resetChecklist() {
     </div>
 
     <el-card class="checklist-card">
-      <el-table :data="checklist" border stripe style="width: 100%">
+      <el-table :data="checklist" :key="tableKey" border stripe style="width: 100%">
         <el-table-column type="index" label="序号" width="60" align="center" />
         
         <el-table-column prop="name" label="报告事项" min-width="280">

@@ -34,14 +34,15 @@ const statistics = ref({
   monthlyChecks: 0,
   immediateChecks: 0,
   uploadedMaterials: 0,
-  generatedReports: 0
+  generatedReports: 0,
+  attachments: 0  // 新增：附件统计
 })
 
 // 最近的工作记录
 const recentActivities = ref([])
 
 // 从store读取统计数据
-function loadStatistics() {
+async function loadStatistics() {
   const monthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`
   
   // 读取各类检察记录
@@ -61,13 +62,30 @@ function loadStatistics() {
     })
   }
   
+  // 统计附件数量
+  let attachmentCount = 0
+  try {
+    const token = localStorage.getItem('token')
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const response = await fetch(`${API_BASE}/api/attachments?upload_month=${monthKey}`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (response.ok) {
+      const result = await response.json()
+      attachmentCount = result.data?.length || 0
+    }
+  } catch (error) {
+    console.error('获取附件统计失败:', error)
+  }
+  
   statistics.value = {
     dailyChecks: filterThisMonth(dailyLogs).length,
     weeklyChecks: filterThisMonth(weeklyLogs).length,
     monthlyChecks: filterThisMonth(monthlyLogs).length,
     immediateChecks: filterThisMonth(immediateLogs).length,
     uploadedMaterials: filterThisMonth(uploadLogs).length,
-    generatedReports: filterThisMonth(reportLogs).length
+    generatedReports: filterThisMonth(reportLogs).length,
+    attachments: attachmentCount
   }
   
   // 合并所有记录并按时间排序，取最近10条
@@ -116,7 +134,8 @@ const statsGroups = computed(() => [
     color: '#67c23a',
     items: [
       { key: 'uploadedMaterials', title: '材料上传', value: statistics.value.uploadedMaterials, icon: Upload, color: '#909399' },
-      { key: 'generatedReports', title: '生成报告', value: statistics.value.generatedReports, icon: DataAnalysis, color: '#409eff' }
+      { key: 'generatedReports', title: '生成报告', value: statistics.value.generatedReports, icon: DataAnalysis, color: '#409eff' },
+      { key: 'attachments', title: '附件数量', value: statistics.value.attachments, icon: FolderOpened, color: '#e6a23c' }
     ]
   }
 ])
@@ -355,6 +374,11 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
+}
+
+/* 报告管理组有3个项目，使用3列布局 */
+.stats-group:last-child .stats-grid {
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .stat-item {

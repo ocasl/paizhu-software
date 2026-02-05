@@ -268,12 +268,19 @@ async function downloadArchive(archive) {
   }
 }
 
-// 下载月度报告
+// 下载月度报告（和报告预览页面使用相同的API）
 async function downloadReport(archive) {
   try {
     ElMessage.info('正在生成报告...')
     
-    const response = await fetch(`${API_BASE}/api/archive/download-report/${archive.id}`, {
+    // 使用和报告预览页面相同的API
+    const params = new URLSearchParams({ 
+      year: archive.year, 
+      month: archive.month,
+      prison_name: archive.prison_name
+    })
+    
+    const response = await fetch(`${API_BASE}/api/reports/generate-report?${params.toString()}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${getToken()}`
@@ -301,16 +308,24 @@ async function downloadReport(archive) {
   }
 }
 
-// 下载事项清单
+// 下载事项清单（和报告清单页面使用相同的API）
 async function downloadChecklist(archive) {
   try {
     ElMessage.info('正在生成清单...')
     
-    const response = await fetch(`${API_BASE}/api/archive/download-checklist/${archive.id}`, {
-      method: 'GET',
+    // 使用和报告清单页面相同的API
+    const response = await fetch(`${API_BASE}/api/reports/generate-checklist`, {
+      method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
         'Authorization': `Bearer ${getToken()}`
-      }
+      },
+      body: JSON.stringify({ 
+        year: parseInt(archive.year),
+        month: parseInt(archive.month),
+        prison_name: archive.prison_name,
+        checklistData: []  // 清单数据从数据库读取
+      })
     })
     
     if (!response.ok) {

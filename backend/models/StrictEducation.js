@@ -51,6 +51,11 @@ module.exports = (sequelize) => {
             allowNull: false,
             comment: '派驻监所名称'
         },
+        // 数据归属月份（业务索引）
+        upload_month: {
+            type: DataTypes.STRING(7),
+            comment: '数据归属月份 (YYYY-MM)'
+        },
         // 同步信息
         sync_batch: {
             type: DataTypes.STRING(50),

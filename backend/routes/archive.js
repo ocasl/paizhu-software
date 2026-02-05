@@ -438,28 +438,18 @@ router.get('/download/:id', async (req, res) => {
             return res.status(404).json({ success: false, message: '归档记录不存在' })
         }
 
-        // 检查权限：
-        // 1. 检察员可以随时下载本单位的归档
-        // 2. 领导只能下载本单位已审批通过的归档
-        // 3. 管理员可以下载所有已审批的归档
-        if (req.user.role === 'inspector') {
-            // 检察员只能下载本单位的
-            if (req.user.prison_name !== archive.prison_name) {
+        // 使用统一的权限检查
+        const { getUserPrisonScope } = require('../middleware/permission')
+        const prisonScope = await getUserPrisonScope(req.user.id, req.user.role)
+        
+        // 检查是否有权限访问该监狱的归档
+        if (prisonScope !== 'ALL') {
+            if (!Array.isArray(prisonScope) || !prisonScope.includes(archive.prison_name)) {
                 return res.status(403).json({
                     success: false,
-                    message: '无权下载其他单位的归档'
+                    message: '无权下载该监狱的归档'
                 })
             }
-        } else if (req.user.role === 'leader') {
-            // 领导可以下载本单位的归档（审核前也可以查看）
-            if (req.user.prison_name !== archive.prison_name) {
-                return res.status(403).json({
-                    success: false,
-                    message: '无权下载其他单位的归档'
-                })
-            }
-        } else if (req.user.role === 'admin') {
-            // 管理员可以下载所有归档
         }
 
         // 创建压缩包
@@ -918,6 +908,17 @@ router.get('/download/:id', async (req, res) => {
         }
         const attachments = Array.from(attachmentMapForReport.values())
 
+        // 🔥 查询 monthly_basic_info 数据（报告和清单都需要）
+        const { MonthlyBasicInfo } = require('../models')
+        const reportMonth = `${archive.year}-${String(archive.month).padStart(2, '0')}`
+        const basicInfo = await MonthlyBasicInfo.findOne({
+            where: {
+                prison_name: archive.prison_name,
+                report_month: reportMonth
+            }
+        })
+        console.log('查询到基本信息:', basicInfo ? '有数据' : '无数据')
+
         // 使用模板生成文档（generateLogFromTemplate 已在上方引入）
         const { generateReportFromTemplate, generateChecklistFromTemplate } = require('../utils/templateGenerator')
 
@@ -929,7 +930,8 @@ router.get('/download/:id', async (req, res) => {
                 weeklyRecords,
                 monthlyRecords,
                 immediateEvents,
-                attachments
+                attachments,
+                basicInfo  // 🔥 传递基本信息数据
             })
             zipArchive.append(reportBuffer, { name: '报告/派驻检察室月度工作情况报告.docx' })
         } catch (e) {
@@ -954,7 +956,8 @@ router.get('/download/:id', async (req, res) => {
                 dailyLogs,
                 weeklyRecords,
                 monthlyRecords,
-                immediateEvents
+                immediateEvents,
+                basicInfo  // 🔥 传递基本信息数据
             })
             zipArchive.append(checklistBuffer, { name: '报告/派驻检察工作报告事项清单.docx' })
             console.log('✓ 事项清单生成成功')
@@ -980,7 +983,7 @@ router.get('/download/:id', async (req, res) => {
 })
 
 /**
- * 单独下载月度报告
+ * 单独下载月度报告（通过 archive.id）
  */
 router.get('/download-report/:id', async (req, res) => {
     try {
@@ -990,89 +993,35 @@ router.get('/download-report/:id', async (req, res) => {
             return res.status(404).json({ success: false, message: '归档记录不存在' })
         }
 
-        // 权限检查
-        if (req.user.role === 'inspector' && req.user.prison_name !== archive.prison_name) {
-            return res.status(403).json({ success: false, message: '无权访问其他单位的归档' })
+        // 使用统一的权限检查
+        const { getUserPrisonScope } = require('../middleware/permission')
+        const prisonScope = await getUserPrisonScope(req.user.id, req.user.role)
+        
+        if (prisonScope !== 'ALL') {
+            if (!Array.isArray(prisonScope) || !prisonScope.includes(archive.prison_name)) {
+                return res.status(403).json({ success: false, message: '无权访问该监狱的归档' })
+            }
         }
-        if (req.user.role === 'leader' && req.user.prison_name !== archive.prison_name) {
-            return res.status(403).json({ success: false, message: '无权访问其他单位的归档' })
-        }
 
-        // 获取数据
-        const usersInSamePrison = await User.findAll({
-            where: { prison_name: archive.prison_name },
-            attributes: ['id']
-        })
-        const userIds = usersInSamePrison.map(u => u.id)
-
-        const startDate = `${archive.year}-${String(archive.month).padStart(2, '0')}-01`;
-        const endDate = archive.month === 12
-            ? `${archive.year + 1}-01-01`
-            : `${archive.year}-${String(archive.month + 1).padStart(2, '0')}-01`;
-
-        const dailyLogs = await DailyLog.findAll({
+        // 从数据库查询 monthly_basic_info 数据
+        const { MonthlyBasicInfo } = require('../models')
+        const reportMonth = `${archive.year}-${String(archive.month).padStart(2, '0')}`
+        
+        const basicInfo = await MonthlyBasicInfo.findOne({
             where: {
-                user_id: { [Op.in]: userIds },
-                log_date: { [Op.gte]: startDate, [Op.lt]: endDate }
+                prison_name: archive.prison_name,
+                report_month: reportMonth
             }
         })
+        
+        console.log('查询到基本信息:', basicInfo ? '有数据' : '无数据')
 
-        const weeklyRecords = await WeeklyRecord.findAll({
-            where: {
-                user_id: { [Op.in]: userIds },
-                record_date: {
-                    [Op.gte]: new Date(archive.year, archive.month - 1, 1),
-                    [Op.lt]: new Date(archive.year, archive.month, 1)
-                }
-            }
-        })
-
-        const targetMonth = `${archive.year}-${String(archive.month).padStart(2, '0')}`
-        const monthlyRecords = await MonthlyRecord.findAll({
-            where: {
-                user_id: { [Op.in]: userIds },
-                record_month: targetMonth
-            }
-        })
-
-        const immediateEvents = await ImmediateEvent.findAll({
-            where: {
-                user_id: { [Op.in]: userIds },
-                event_date: {
-                    [Op.gte]: new Date(archive.year, archive.month - 1, 1),
-                    [Op.lt]: new Date(archive.year, archive.month, 1)
-                }
-            }
-        })
-
-        const attachments = await Attachment.findAll({
-            where: {
-                user_id: { [Op.in]: userIds },
-                createdAt: {
-                    [Op.gte]: new Date(archive.year, archive.month - 1, 1),
-                    [Op.lt]: new Date(archive.year, archive.month, 1)
-                }
-            }
-        })
-
-        // 生成报告
+        // 生成报告（使用数据库数据）
         const { generateReportFromTemplate } = require('../utils/templateGenerator')
-
-        console.log('准备生成报告,数据统计:', {
-            dailyLogs: dailyLogs.length,
-            weeklyRecords: weeklyRecords.length,
-            monthlyRecords: monthlyRecords.length,
-            immediateEvents: immediateEvents.length,
-            attachments: attachments.length
-        })
 
         const reportBuffer = await generateReportFromTemplate({
             archive,
-            dailyLogs,
-            weeklyRecords,
-            monthlyRecords,
-            immediateEvents,
-            attachments
+            basicInfo: basicInfo || {}  // 传递基本信息数据
         })
 
         // 设置响应头
@@ -1090,9 +1039,18 @@ router.get('/download-report/:id', async (req, res) => {
     }
 })
 /**
- * 单独下载事项清单
+ * 单独下载事项清单（通过 archive.id）
+ * 支持 GET 和 POST 两种方式
  */
+router.get('/download-checklist/:id', async (req, res) => {
+    await handleDownloadChecklist(req, res)
+})
+
 router.post('/download-checklist/:id', async (req, res) => {
+    await handleDownloadChecklist(req, res)
+})
+
+async function handleDownloadChecklist(req, res) {
     try {
         const archive = await MonthlyArchive.findByPk(req.params.id)
 
@@ -1110,16 +1068,25 @@ router.post('/download-checklist/:id', async (req, res) => {
             }
         }
 
-        // 从请求体获取前端传来的清单数据
-        const { checklistData } = req.body
+        // 从数据库查询 monthly_basic_info 数据
+        const { MonthlyBasicInfo } = require('../models')
+        const reportMonth = `${archive.year}-${String(archive.month).padStart(2, '0')}`
         
-        console.log('收到前端清单数据:', checklistData)
+        const basicInfo = await MonthlyBasicInfo.findOne({
+            where: {
+                prison_name: archive.prison_name,
+                report_month: reportMonth
+            }
+        })
+        
+        console.log('查询到基本信息:', basicInfo ? '有数据' : '无数据')
 
-        // 生成清单
+        // 生成清单（使用数据库数据）
         const { generateChecklistFromFrontendData } = require('../utils/templateGenerator')
         const checklistBuffer = await generateChecklistFromFrontendData({
             archive,
-            checklistData: checklistData || []
+            basicInfo: basicInfo || {},  // 传递基本信息数据
+            checklistData: []  // 清单数据暂时为空
         })
 
         // 设置响应头
@@ -1131,7 +1098,7 @@ router.post('/download-checklist/:id', async (req, res) => {
         console.error('下载清单失败:', error)
         res.status(500).json({ success: false, message: '下载清单失败: ' + error.message })
     }
-})
+}
 
 /**
  * 生成月度报告概览

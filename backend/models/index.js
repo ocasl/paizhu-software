@@ -42,6 +42,10 @@ const RestraintUsage = require('./RestraintUsage')(sequelize)
 const MailRecord = require('./MailRecord')(sequelize)
 const Blacklist = require('./Blacklist')(sequelize)
 const CriminalReport = require('./CriminalReport')(sequelize)
+const ReportChecklistItem = require('./ReportChecklistItem')(sequelize)
+const MonthlyBasicInfo = require('./MonthlyBasicInfo')(sequelize)
+const CompilationCategory = require('./CompilationCategory')(sequelize)
+const CompilationDocument = require('./CompilationDocument')(sequelize)
 
 // 定义关联关系
 // 用户与监狱范围
@@ -69,6 +73,16 @@ User.hasMany(MonthlyArchive, { foreignKey: 'user_id', as: 'submittedArchives' })
 MonthlyArchive.belongsTo(User, { foreignKey: 'user_id', as: 'submitter' })
 MonthlyArchive.belongsTo(User, { foreignKey: 'reviewer_id', as: 'reviewer' })
 
+// 汇编功能关联
+CompilationDocument.belongsTo(CompilationCategory, {
+    foreignKey: 'category_id',
+    as: 'category'
+})
+CompilationCategory.hasMany(CompilationDocument, {
+    foreignKey: 'category_id',
+    as: 'documents'
+})
+
 module.exports = {
     sequelize,
     Sequelize,
@@ -87,5 +101,10 @@ module.exports = {
     RestraintUsage,
     MailRecord,
     Blacklist,
-    CriminalReport
+    CriminalReport,
+    ReportChecklistItem,
+    MonthlyBasicInfo,
+    // 汇编功能
+    CompilationCategory,
+    CompilationDocument
 }

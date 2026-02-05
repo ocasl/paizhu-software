@@ -6,12 +6,17 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Delete, Camera, VideoCamera, List, Edit, View, Download, Printer, Calendar, Clock, Document, Folder, Picture, Files, Search, Refresh } from '@element-plus/icons-vue'
 import { exportDailyLogToWord, getLogPreviewData } from '../utils/docxGenerator'
 import { debounce } from '../utils/debounce'
+import PrisonSelector from '../components/PrisonSelector.vue'
 
 const userStore = useUserStore()
 const reportStore = useReportStore()
 
+// 检查用户是否是检察官
+const isInspector = computed(() => userStore.userInfo?.role === 'inspector')
+
 // 视图模式: 'form' 新建/编辑日志, 'history' 查看历史
-const viewMode = ref('form')
+// 管理员默认显示历史记录，检察官默认显示表单
+const viewMode = ref(isInspector.value ? 'form' : 'history')
 
 // 当前日期
 const today = new Date().toLocaleDateString('zh-CN')
@@ -113,7 +118,7 @@ async function showDiscrepancyDialog(discrepancies) {
 const historyLogs = ref([])
 const loadingHistory = ref(false)
 
-// 筛选条件
+// 筛选条件（默认为空，不自动筛选）
 const historyMonth = ref('')
 const filterPrisonName = ref('') // 派驻单位筛选
 const filterDateRange = ref([]) // 日期范围筛选
@@ -239,8 +244,8 @@ async function fetchHistoryLogs(month = null) {
   }
 }
 
-// 重置筛选条件
-function resetFilters() {
+// 清空筛选条件
+function clearFilters() {
   filterDateRange.value = []
   filterPrisonName.value = ''
   historyMonth.value = ''
@@ -446,6 +451,14 @@ function getAttachmentTitle(attachment) {
   }
   
   return categoryLabel
+}
+
+// 获取附件标签颜色
+function getAttachmentTagType(category) {
+  if (category.startsWith('weekly')) return 'warning'
+  if (category.startsWith('monthly')) return 'success'
+  if (category === 'immediate_event') return 'danger'
+  return 'primary'
 }
 
 // 格式化文件大小
@@ -787,6 +800,7 @@ async function uploadAttachments(logId, logDate) {
     formData.append('related_log_id', logId)
     formData.append('related_log_type', 'daily')
     formData.append('log_date', logDate)  // 传递日志记录日期
+    formData.append('upload_month', logDate.slice(0, 7))  // 根据日志日期设置归档月份（YYYY-MM）
     
     const response = await fetch(`${API_BASE}/api/attachments/upload`, {
       method: 'POST',
@@ -922,12 +936,15 @@ async function uploadWeeklyAttachments(recordId, logDate) {
   const uploadTasks = []
   const token = localStorage.getItem('token')
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+  const uploadMonth = logDate.slice(0, 7)  // 根据日志日期设置归档月份（YYYY-MM）
   
   console.log('📎 开始上传周检察附件')
   console.log('  recordId:', recordId)
   console.log('  logDate:', logDate)
+  console.log('  uploadMonth:', uploadMonth)
   console.log('  医院附件数:', weeklyHospitalFiles.value.length)
   console.log('  外伤附件数:', weeklyInjuryFiles.value.length)
+  console.log('  谈话笔录数:', weeklyTalkFiles.value.length)
   console.log('  违禁品附件数:', weeklyContrabandFiles.value.length)
   
   // 医院检察附件
@@ -940,6 +957,7 @@ async function uploadWeeklyAttachments(recordId, logDate) {
     formData.append('related_log_id', recordId)
     formData.append('related_log_type', 'weekly')
     formData.append('log_date', logDate)  // 传递日志记录日期
+    formData.append('upload_month', uploadMonth)  // 根据日志日期设置归档月份
     
     uploadTasks.push(
       fetch(`${API_BASE}/api/attachments/upload`, {
@@ -967,6 +985,7 @@ async function uploadWeeklyAttachments(recordId, logDate) {
     formData.append('related_log_id', recordId)
     formData.append('related_log_type', 'weekly')
     formData.append('log_date', logDate)  // 传递日志记录日期
+    formData.append('upload_month', uploadMonth)  // 根据日志日期设置归档月份
     
     uploadTasks.push(
       fetch(`${API_BASE}/api/attachments/upload`, {
@@ -994,6 +1013,7 @@ async function uploadWeeklyAttachments(recordId, logDate) {
     formData.append('related_log_id', recordId)
     formData.append('related_log_type', 'weekly')
     formData.append('log_date', logDate)  // 传递日志记录日期
+    formData.append('upload_month', uploadMonth)  // 根据日志日期设置归档月份
     
     uploadTasks.push(
       fetch(`${API_BASE}/api/attachments/upload`, {
@@ -1007,6 +1027,34 @@ async function uploadWeeklyAttachments(recordId, logDate) {
         return response.json()
       }).then(result => {
         console.log('✅ 违禁品照片上传成功:', result)
+      })
+    )
+  }
+  
+  // 谈话笔录
+  if (weeklyTalkFiles.value.length > 0) {
+    const formData = new FormData()
+    weeklyTalkFiles.value.forEach(fileItem => {
+      formData.append('files', fileItem.raw)
+    })
+    formData.append('category', 'weekly_talk')
+    formData.append('related_log_id', recordId)
+    formData.append('related_log_type', 'weekly')
+    formData.append('log_date', logDate)  // 传递日志记录日期
+    formData.append('upload_month', uploadMonth)  // 根据日志日期设置归档月份
+    
+    uploadTasks.push(
+      fetch(`${API_BASE}/api/attachments/upload`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
+      }).then(response => {
+        if (!response.ok) {
+          throw new Error('谈话笔录上传失败')
+        }
+        return response.json()
+      }).then(result => {
+        console.log('✅ 谈话笔录上传成功:', result)
       })
     )
   }
@@ -1034,6 +1082,7 @@ async function uploadMonthlyAttachments(recordId, logDate) {
   
   const token = localStorage.getItem('token')
   const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+  const uploadMonth = logDate.slice(0, 7)  // 根据日志日期设置归档月份（YYYY-MM）
   
   const formData = new FormData()
   monthlyPunishmentFiles.value.forEach(fileItem => {
@@ -1043,6 +1092,7 @@ async function uploadMonthlyAttachments(recordId, logDate) {
   formData.append('related_log_id', recordId)
   formData.append('related_log_type', 'monthly')
   formData.append('log_date', logDate)  // 传递日志记录日期
+  formData.append('upload_month', uploadMonth)  // 根据日志日期设置归档月份
   
   const response = await fetch(`${API_BASE}/api/attachments/upload`, {
     method: 'POST',
@@ -1415,17 +1465,100 @@ async function syncWeeklyToLog() {
         : summaryParts.join('\n')
     }
     
-    // 4. 清空附件列表
+    // 4. 清空附件列表和 upload 组件
     weeklyHospitalFiles.value = []
     weeklyInjuryFiles.value = []
     weeklyContrabandFiles.value = []
     
+    // 清空 el-upload 组件的内部状态
+    if (weeklyHospitalUploadRef.value) {
+      weeklyHospitalUploadRef.value.clearFiles()
+    }
+    if (weeklyInjuryUploadRef.value) {
+      weeklyInjuryUploadRef.value.clearFiles()
+    }
+    if (weeklyContrabandUploadRef.value) {
+      weeklyContrabandUploadRef.value.clearFiles()
+    }
+    
     ElMessage.success('周检察内容已保存并同步到日志')
     showWeeklyDialog.value = false
+    
+    // 清空周检察表单
+    resetWeeklyForm()
   } catch (error) {
     console.error('同步周检察失败:', error)
     ElMessage.error('同步失败: ' + error.message)
   }
+}
+
+// 打开周检察对话框
+function openWeeklyDialog() {
+  // 检查是否有草稿
+  const draft = localStorage.getItem('weekly-draft')
+  if (!draft) {
+    // 没有草稿，重置表单
+    resetWeeklyForm()
+  }
+  showWeeklyDialog.value = true
+}
+
+// 重置周检察表单
+function resetWeeklyForm() {
+  // 重置表单数据为初始状态
+  Object.assign(weeklyFormData, {
+    record_date: getLocalDateString(),
+    week_number: Math.ceil((new Date().getDate()) / 7),
+    hospital_check: {
+      checked: false,
+      focusAreas: {
+        policeEquipment: false,
+        strictControl: false,
+        confinement: false
+      },
+      hasAnomalies: false,
+      anomalyDescription: ''
+    },
+    injury_check: {
+      found: false,
+      count: 0,
+      verified: false,
+      anomalyDescription: '',
+      transcriptUploaded: false
+    },
+    talk_records: [],
+    mailbox: {
+      opened: false,
+      openCount: 0,
+      receivedCount: 0,
+      valuableClues: false,
+      clueDescription: ''
+    },
+    contraband: {
+      checked: false,
+      found: false,
+      foundCount: 0,
+      involvedCount: 0,
+      description: ''
+    }
+  })
+  
+  // 清空草稿
+  localStorage.removeItem('weekly-draft')
+  
+  // 清空附件列表
+  weeklyHospitalFiles.value = []
+  weeklyInjuryFiles.value = []
+  weeklyTalkFiles.value = []
+  weeklyContrabandFiles.value = []
+  
+  // 清空上传组件
+  nextTick(() => {
+    weeklyHospitalUploadRef.value?.clearFiles()
+    weeklyInjuryUploadRef.value?.clearFiles()
+    weeklyTalkUploadRef.value?.clearFiles()
+    weeklyContrabandUploadRef.value?.clearFiles()
+  })
 }
 
 // 同步月检察内容到日志
@@ -1511,15 +1644,72 @@ async function syncMonthlyToLog() {
         : summaryParts.join('\n')
     }
     
-    // 4. 清空附件列表
+    // 4. 清空附件列表和 upload 组件
     monthlyPunishmentFiles.value = []
+    
+    // 清空 el-upload 组件的内部状态
+    if (monthlyPunishmentUploadRef.value) {
+      monthlyPunishmentUploadRef.value.clearFiles()
+    }
     
     ElMessage.success('月检察内容已保存并同步到日志')
     showMonthlyDialog.value = false
+    
+    // 清空月检察表单
+    resetMonthlyForm()
   } catch (error) {
     console.error('同步月检察失败:', error)
     ElMessage.error('同步失败: ' + error.message)
   }
+}
+
+// 打开月检察对话框
+function openMonthlyDialog() {
+  // 检查是否有草稿
+  const draft = localStorage.getItem('monthly-draft')
+  if (!draft) {
+    // 没有草稿，重置表单
+    resetMonthlyForm()
+  }
+  showMonthlyDialog.value = true
+}
+
+// 重置月检察表单
+function resetMonthlyForm() {
+  // 重置表单数据为初始状态
+  Object.assign(monthlyFormData, {
+    record_date: getLocalDateString(),
+    punishment: {
+      checked: false,
+      count: 0,
+      evidenceUploaded: false
+    },
+    position_stats: {
+      startCount: 0,
+      endCount: 0,
+      newCount: 0,
+      transferCount: 0
+    },
+    meeting: {
+      attended: false,
+      meetingType: 'analysis',
+      count: 1,
+      role: 'listener',
+      meetingDate: '',
+      notes: ''
+    }
+  })
+  
+  // 清空草稿
+  localStorage.removeItem('monthly-draft')
+  
+  // 清空附件列表
+  monthlyPunishmentFiles.value = []
+  
+  // 清空上传组件
+  nextTick(() => {
+    monthlyPunishmentUploadRef.value?.clearFiles()
+  })
 }
 
 // 在组件挂载时加载数据
@@ -1604,19 +1794,7 @@ async function submitLog() {
     
     const result = await response.json()
     if (response.ok && result.success) {
-      // 上传附件（传递日志记录日期）
-      if (uploadFileList.value.length > 0) {
-        try {
-          const logDate = getLocalDateString(new Date(logForm.date))
-          console.log('📎 上传日检察附件，日志日期:', logDate)
-          await uploadAttachments(result.data.id, logDate)
-          ElMessage.success('日志和附件提交成功')
-        } catch (error) {
-          ElMessage.warning('日志提交成功，但附件上传失败')
-        }
-      } else {
-        ElMessage.success('日志提交成功')
-      }
+      ElMessage.success('日志提交成功')
       
       // 同步数据到报告 Store
       reportStore.addDailyLog({
@@ -1654,9 +1832,12 @@ async function submitLog() {
 
 // 重置表单
 function resetForm() {
-  // 重新加载默认设置
-  loadDefaultSettings()
+  // 保留派驻单位和派驻人员，但日期设置为明天
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  logForm.date = tomorrow.toISOString().split('T')[0]
   
+  // 清空所有业务数据
   logForm.threeScenes = {
     labor: { checked: false, locations: [], focusPoints: [], issues: '', notes: '' },
     living: { checked: false, locations: [], focusPoints: [], issues: '', notes: '' },
@@ -1672,7 +1853,6 @@ function resetForm() {
   logForm.otherWork = { supervisionSituation: '', feedbackSituation: '' }
   logForm.notes = ''
   monitorAnomalies.value = []
-  uploadFileList.value = []
 }
 
 // 三大现场选项配置
@@ -1712,7 +1892,7 @@ const threeScenesCompleted = computed(() => {
     <!-- 视图切换按钮 -->
     <div class="view-toggle">
       <el-radio-group v-model="viewMode" size="large">
-        <el-radio-button value="form">
+        <el-radio-button v-if="isInspector" value="form">
           <el-icon><Edit /></el-icon>
           新建日志
         </el-radio-button>
@@ -2040,7 +2220,7 @@ const threeScenesCompleted = computed(() => {
               type="primary" 
               :icon="Calendar" 
               size="large"
-              @click="showWeeklyDialog = true"
+              @click="openWeeklyDialog"
             >
               填写周检察
             </el-button>
@@ -2048,7 +2228,7 @@ const threeScenesCompleted = computed(() => {
               type="success" 
               :icon="Calendar" 
               size="large"
-              @click="showMonthlyDialog = true"
+              @click="openMonthlyDialog"
             >
               填写月检察
             </el-button>
@@ -2086,33 +2266,6 @@ const threeScenesCompleted = computed(() => {
             placeholder="填写其他需要记录的事项..."
             :rows="3"
           />
-        </el-form-item>
-
-        <!-- 相关材料附件 -->
-        <el-divider content-position="left">
-          <el-icon><Document /></el-icon>
-          相关材料附件
-        </el-divider>
-        
-        <el-form-item label="上传附件">
-          <el-upload
-            ref="uploadRef"
-            action="#"
-            :auto-upload="false"
-            :file-list="uploadFileList"
-            :on-change="handleFileChange"
-            :on-remove="handleFileRemove"
-            multiple
-            :limit="10"
-            list-type="text"
-          >
-            <el-button type="primary" :icon="Plus">选择文件</el-button>
-            <template #tip>
-              <div class="el-upload__tip">
-                支持图片、PDF、Word、Excel文件，单个文件不超过50MB，最多10个
-              </div>
-            </template>
-          </el-upload>
         </el-form-item>
 
         <!-- 操作按钮 -->
@@ -2192,6 +2345,37 @@ const threeScenesCompleted = computed(() => {
           <el-tag>共 {{ totalLogs }} 条</el-tag>
         </div>
       </template>
+
+      <!-- 筛选控件 -->
+      <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center;">
+        <PrisonSelector 
+          v-model="filterPrisonName" 
+          @change="fetchHistoryLogs"
+          placeholder="选择监狱筛选"
+          :auto-select="false"
+          style="width: 200px;"
+        />
+        <el-date-picker
+          v-model="historyMonth"
+          type="month"
+          placeholder="选择月份"
+          format="YYYY年MM月"
+          value-format="YYYY-MM"
+          @change="fetchHistoryLogs"
+          style="width: 180px;"
+        />
+        <el-date-picker
+          v-model="filterDateRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          @change="fetchHistoryLogs"
+          style="width: 280px;"
+        />
+        <el-button @click="clearFilters">清空筛选</el-button>
+      </div>
 
       <!-- 批量操作按钮 -->
       <div v-if="selectedLogs.length > 0" style="margin-bottom: 16px">
@@ -2287,7 +2471,7 @@ const threeScenesCompleted = computed(() => {
       />
 
       <el-empty v-else description="暂无日志记录">
-        <el-button type="primary" @click="viewMode = 'form'">新建日志</el-button>
+        <el-button v-if="isInspector" type="primary" @click="viewMode = 'form'">新建日志</el-button>
       </el-empty>
     </el-card>
 
@@ -2322,11 +2506,11 @@ const threeScenesCompleted = computed(() => {
             {{ viewingLog.feedbackSituation || '-' }}
           </el-descriptions-item>
         </el-descriptions>
-
-        <!-- 附件列表 -->
+        
+        <!-- 当天附件列表 -->
         <el-divider content-position="left">
           <el-icon><Document /></el-icon>
-          相关材料附件 ({{ viewingLogAttachments.length }})
+          当天附件 ({{ viewingLogAttachments.length }})
         </el-divider>
         
         <div v-if="viewingLogAttachments.length > 0" class="attachments-list">
@@ -2347,7 +2531,7 @@ const threeScenesCompleted = computed(() => {
               <!-- 文件信息 -->
               <div class="file-details">
                 <div class="file-title">
-                  <el-tag size="small" :type="attachment.category.startsWith('weekly') ? 'warning' : attachment.category.startsWith('monthly') ? 'success' : 'primary'">
+                  <el-tag size="small" :type="getAttachmentTagType(attachment.category)">
                     {{ getAttachmentTitle(attachment) }}
                   </el-tag>
                 </div>
@@ -2379,7 +2563,7 @@ const threeScenesCompleted = computed(() => {
             </div>
           </el-card>
         </div>
-        <el-empty v-else description="暂无附件" :image-size="80" />
+        <el-empty v-else description="当天暂无附件" :image-size="80" />
       </template>
       <template #footer>
         <el-button @click="closeLogDetail">关闭</el-button>

@@ -19,7 +19,7 @@ const { v4: uuidv4 } = require('uuid')
 const { Op } = require('sequelize')
 const {
     Prisoner, StrictEducation, Confinement, RestraintUsage,
-    MailRecord, Blacklist, Attachment, User, CriminalReport
+    MailRecord, Blacklist, Attachment, User, CriminalReport, MonthlyBasicInfo
 } = require('../models')
 const { authenticateToken, requireAdmin } = require('../middleware/auth')
 const {
@@ -78,6 +78,19 @@ const uploadWord = multer({
 
 router.use(authenticateToken)
 
+// 材料上传权限检查中间件：只允许检察官上传
+const checkUploadPermission = (req, res, next) => {
+    if (req.user.role !== 'inspector') {
+        return res.status(403).json({ error: '只有派驻检察官可以上传材料' })
+    }
+    
+    if (!req.user.prison_name) {
+        return res.status(400).json({ error: '用户未设置派驻单位，无法上传数据' })
+    }
+    
+    next()
+}
+
 /**
  * 读取Excel文件并返回原始数据
  */
@@ -93,7 +106,7 @@ function readExcelFile(filePath) {
  */
 async function syncRecords(Model, records, syncBatch, syncedAt, prisonName, options = {}) {
     const stats = { inserted: 0, updated: 0, errors: [] }
-    const { uniqueKey = 'prisoner_id', useCreateDate = true } = options
+    const { uniqueKey = 'prisoner_id', useCreateDate = true, uploadMonth } = options
 
     for (const record of records) {
         try {
@@ -102,16 +115,24 @@ async function syncRecords(Model, records, syncBatch, syncedAt, prisonName, opti
                 await Model.create({
                     ...record,
                     prison_name: prisonName,
+                    upload_month: uploadMonth,  // 使用归属月份
                     sync_batch: syncBatch,
                     synced_at: syncedAt
                 })
                 stats.inserted++
             } else {
-                // 根据唯一键查找并更新或插入（同时按派驻单位过滤）
+                // 根据唯一键查找并更新或插入（按派驻单位 + 归属月份过滤）
                 const whereClause = { 
                     [uniqueKey]: record[uniqueKey],
                     prison_name: prisonName
                 }
+                
+                // 使用归属月份而不是 Excel 中的日期
+                if (uploadMonth) {
+                    whereClause.upload_month = uploadMonth
+                }
+                
+                // 如果需要按创建日期区分（同一个月内可能有多条记录）
                 if (useCreateDate && record.create_date) {
                     whereClause.create_date = record.create_date
                 }
@@ -121,6 +142,7 @@ async function syncRecords(Model, records, syncBatch, syncedAt, prisonName, opti
                     await existing.update({
                         ...record,
                         prison_name: prisonName,
+                        upload_month: uploadMonth,
                         sync_batch: syncBatch,
                         synced_at: syncedAt
                     })
@@ -129,6 +151,7 @@ async function syncRecords(Model, records, syncBatch, syncedAt, prisonName, opti
                     await Model.create({
                         ...record,
                         prison_name: prisonName,
+                        upload_month: uploadMonth,  // 🔥 修复：添加 upload_month
                         sync_batch: syncBatch,
                         synced_at: syncedAt
                     })
@@ -163,7 +186,7 @@ async function syncPrisoners(prisoners, syncedAt) {
 // 1. 严管教育审批上传
 // POST /api/template-sync/strict-education
 // ============================================================
-router.post('/strict-education', upload.single('file'), async (req, res) => {
+router.post('/strict-education', checkUploadPermission, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: '请选择要上传的文件' })
@@ -174,6 +197,14 @@ router.post('/strict-education', upload.single('file'), async (req, res) => {
         if (!prisonName) {
             return res.status(400).json({ error: '用户未设置派驻单位，无法上传数据' })
         }
+
+        // 获取数据归属月份（从前端传递）
+        const uploadMonth = req.body.upload_month
+        if (!uploadMonth) {
+            return res.status(400).json({ error: '请选择数据归属月份' })
+        }
+
+        console.log('📤 上传严管教育数据:', { prisonName, uploadMonth })
 
         const syncBatch = uuidv4()
         const syncedAt = new Date()
@@ -191,15 +222,38 @@ router.post('/strict-education', upload.single('file'), async (req, res) => {
             await syncPrisoners(parseResult.prisoners, syncedAt)
         }
 
-        // 同步记录（传递派驻单位）
+        // 同步记录（传递派驻单位和归属月份）
         const stats = await syncRecords(
             StrictEducation,
             parseResult.records,
             syncBatch,
             syncedAt,
             prisonName,
-            { uniqueKey: 'prisoner_id', useCreateDate: true }
+            { uniqueKey: 'prisoner_id', useCreateDate: true, uploadMonth }
         )
+        
+        // 🔥 同步更新 monthly_basic_info 表
+        const [basicInfo] = await MonthlyBasicInfo.findOrCreate({
+            where: {
+                prison_name: prisonName,
+                report_month: uploadMonth
+            },
+            defaults: {
+                user_id: req.user.id,
+                prison_name: prisonName,
+                report_month: uploadMonth
+            }
+        })
+        
+        // 统计严管教育人数（记过）
+        const strictCount = new Set(parseResult.records.map(r => r.prisoner_id)).size
+        
+        // 直接覆盖更新
+        await basicInfo.update({
+            recorded_punishments: strictCount
+        })
+        
+        console.log('✅ 已同步更新 monthly_basic_info: 记过', strictCount, '人')
 
         res.json({
             success: true,
@@ -225,7 +279,7 @@ router.post('/strict-education', upload.single('file'), async (req, res) => {
 // 2. 禁闭审批上传
 // POST /api/template-sync/confinement
 // ============================================================
-router.post('/confinement', upload.single('file'), async (req, res) => {
+router.post('/confinement', checkUploadPermission, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: '请选择要上传的文件' })
@@ -236,6 +290,14 @@ router.post('/confinement', upload.single('file'), async (req, res) => {
         if (!prisonName) {
             return res.status(400).json({ error: '用户未设置派驻单位，无法上传数据' })
         }
+
+        // 获取数据归属月份（从前端传递）
+        const uploadMonth = req.body.upload_month
+        if (!uploadMonth) {
+            return res.status(400).json({ error: '请选择数据归属月份' })
+        }
+
+        console.log('📤 上传禁闭数据:', { prisonName, uploadMonth })
 
         const syncBatch = uuidv4()
         const syncedAt = new Date()
@@ -257,8 +319,31 @@ router.post('/confinement', upload.single('file'), async (req, res) => {
             syncBatch,
             syncedAt,
             prisonName,
-            { uniqueKey: 'prisoner_id', useCreateDate: true }
+            { uniqueKey: 'prisoner_id', useCreateDate: true, uploadMonth }
         )
+        
+        // 🔥 同步更新 monthly_basic_info 表
+        const [basicInfo] = await MonthlyBasicInfo.findOrCreate({
+            where: {
+                prison_name: prisonName,
+                report_month: uploadMonth
+            },
+            defaults: {
+                user_id: req.user.id,
+                prison_name: prisonName,
+                report_month: uploadMonth
+            }
+        })
+        
+        // 统计禁闭人数
+        const confinementCount = new Set(parseResult.records.map(r => r.prisoner_id)).size
+        
+        // 直接覆盖更新
+        await basicInfo.update({
+            confinement_punishments: confinementCount
+        })
+        
+        console.log('✅ 已同步更新 monthly_basic_info: 禁闭', confinementCount, '人')
 
         res.json({
             success: true,
@@ -284,7 +369,7 @@ router.post('/confinement', upload.single('file'), async (req, res) => {
 // 3. 涉黑恶名单上传
 // POST /api/template-sync/blacklist
 // ============================================================
-router.post('/blacklist', upload.single('file'), async (req, res) => {
+router.post('/blacklist', checkUploadPermission, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: '请选择要上传的文件' })
@@ -295,6 +380,14 @@ router.post('/blacklist', upload.single('file'), async (req, res) => {
         if (!prisonName) {
             return res.status(400).json({ error: '用户未设置派驻单位，无法上传数据' })
         }
+
+        // 获取数据归属月份（从前端传递）
+        const uploadMonth = req.body.upload_month
+        if (!uploadMonth) {
+            return res.status(400).json({ error: '请选择数据归属月份' })
+        }
+
+        console.log('📤 上传涉黑恶名单:', { prisonName, uploadMonth })
 
         const syncBatch = uuidv4()
         const syncedAt = new Date()
@@ -313,8 +406,33 @@ router.post('/blacklist', upload.single('file'), async (req, res) => {
             syncBatch,
             syncedAt,
             prisonName,
-            { uniqueKey: 'prisoner_id', useCreateDate: false }
+            { uniqueKey: 'prisoner_id', useCreateDate: false, uploadMonth }
         )
+        
+        // 🔥 同步更新 monthly_basic_info 表
+        const [basicInfo] = await MonthlyBasicInfo.findOrCreate({
+            where: {
+                prison_name: prisonName,
+                report_month: uploadMonth
+            },
+            defaults: {
+                user_id: req.user.id,
+                prison_name: prisonName,
+                report_month: uploadMonth
+            }
+        })
+        
+        // 统计涉黑涉恶人数
+        const gangCount = parseResult.records.filter(r => r.involvement_type && r.involvement_type.includes('涉黑')).length
+        const evilCount = parseResult.records.filter(r => r.involvement_type && r.involvement_type.includes('涉恶')).length
+        
+        // 直接覆盖更新
+        await basicInfo.update({
+            gang_related: gangCount,
+            evil_forces: evilCount
+        })
+        
+        console.log('✅ 已同步更新 monthly_basic_info: 涉黑', gangCount, '人，涉恶', evilCount, '人')
 
         res.json({
             success: true,
@@ -340,7 +458,7 @@ router.post('/blacklist', upload.single('file'), async (req, res) => {
 // 4. 戒具使用审批上传
 // POST /api/template-sync/restraint
 // ============================================================
-router.post('/restraint', upload.single('file'), async (req, res) => {
+router.post('/restraint', checkUploadPermission, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: '请选择要上传的文件' })
@@ -351,6 +469,14 @@ router.post('/restraint', upload.single('file'), async (req, res) => {
         if (!prisonName) {
             return res.status(400).json({ error: '用户未设置派驻单位，无法上传数据' })
         }
+
+        // 获取数据归属月份（从前端传递）
+        const uploadMonth = req.body.upload_month
+        if (!uploadMonth) {
+            return res.status(400).json({ error: '请选择数据归属月份' })
+        }
+
+        console.log('📤 上传戒具使用数据:', { prisonName, uploadMonth })
 
         const syncBatch = uuidv4()
         const syncedAt = new Date()
@@ -372,7 +498,7 @@ router.post('/restraint', upload.single('file'), async (req, res) => {
             syncBatch,
             syncedAt,
             prisonName,
-            { uniqueKey: 'prisoner_id', useCreateDate: true }
+            { uniqueKey: 'prisoner_id', useCreateDate: true, uploadMonth }
         )
 
         res.json({
@@ -399,7 +525,7 @@ router.post('/restraint', upload.single('file'), async (req, res) => {
 // 5. 信件汇总上传
 // POST /api/template-sync/mail
 // ============================================================
-router.post('/mail', upload.single('file'), async (req, res) => {
+router.post('/mail', checkUploadPermission, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: '请选择要上传的文件' })
@@ -411,6 +537,14 @@ router.post('/mail', upload.single('file'), async (req, res) => {
             return res.status(400).json({ error: '用户未设置派驻单位，无法上传数据' })
         }
 
+        // 获取数据归属月份（从前端传递）
+        const uploadMonth = req.body.upload_month
+        if (!uploadMonth) {
+            return res.status(400).json({ error: '请选择数据归属月份' })
+        }
+
+        console.log('📤 上传信件数据:', { prisonName, uploadMonth })
+
         const syncBatch = uuidv4()
         const syncedAt = new Date()
 
@@ -421,15 +555,44 @@ router.post('/mail', upload.single('file'), async (req, res) => {
 
         const parseResult = parseMailRecord(data)
 
-        // 信件记录直接插入，不做去重
+        // 先删除该监狱该月份的旧数据（覆盖而不是累加）
+        const deletedCount = await MailRecord.destroy({
+            where: {
+                prison_name: prisonName,
+                upload_month: uploadMonth
+            }
+        })
+        console.log(`已删除 ${deletedCount} 条旧信件记录`)
+
+        // 插入新数据
         const stats = await syncRecords(
             MailRecord,
             parseResult.records,
             syncBatch,
             syncedAt,
             prisonName,
-            { insertOnly: true }
+            { insertOnly: true, uploadMonth }
         )
+        
+        // 🔥 同步更新 monthly_basic_info 表的信件数量
+        const [basicInfo] = await MonthlyBasicInfo.findOrCreate({
+            where: {
+                prison_name: prisonName,
+                report_month: uploadMonth
+            },
+            defaults: {
+                user_id: req.user.id,
+                prison_name: prisonName,
+                report_month: uploadMonth
+            }
+        })
+        
+        // 直接覆盖更新信件数量
+        await basicInfo.update({
+            letters_received: parseResult.records.length
+        })
+        
+        console.log('✅ 已同步更新 monthly_basic_info: 信件', parseResult.records.length, '封')
 
         res.json({
             success: true,
@@ -452,10 +615,10 @@ router.post('/mail', upload.single('file'), async (req, res) => {
 })
 
 // ============================================================
-// 6. 犯情动态上传（Word文档）
+// 6. 犯情动态上传（Word文档）- 使用Python解析
 // POST /api/template-sync/criminal-report
 // ============================================================
-router.post('/criminal-report', uploadWord.single('file'), async (req, res) => {
+router.post('/criminal-report', checkUploadPermission, uploadWord.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: '请选择要上传的犯情动态Word文件' })
@@ -467,29 +630,79 @@ router.post('/criminal-report', uploadWord.single('file'), async (req, res) => {
             return res.status(400).json({ error: '用户未设置派驻单位，无法上传数据' })
         }
 
-        // 获取前端传递的归属月份（必需）
-        const reportMonth = req.body.month
-        if (!reportMonth) {
+        // 获取数据归属月份（从前端传递）
+        const uploadMonth = req.body.upload_month || req.body.month  // 兼容旧字段名
+        if (!uploadMonth) {
             return res.status(400).json({ error: '请选择数据归属月份' })
         }
+
+        console.log('📤 上传犯情动态:', { prisonName, uploadMonth })
 
         const syncBatch = uuidv4()
         const syncedAt = new Date()
 
-        // 读取Word文档转为文本
-        const buffer = fs.readFileSync(req.file.path)
-        const mammothResult = await mammoth.extractRawText({ buffer })
-        const textContent = mammothResult.value
-
-        // 解析犯情动态内容
-        const parsed = parseCriminalReport(textContent)
+        // 调用Python脚本解析Word文档
+        const { spawn } = require('child_process')
+        const pythonScript = path.join(__dirname, '../utils/parse_criminal_report.py')
+        
+        console.log('🐍 调用Python解析器:', pythonScript)
+        console.log('📄 文件路径:', req.file.path)
+        
+        const pythonProcess = spawn('python', [pythonScript, req.file.path])
+        
+        let pythonOutput = ''
+        let pythonError = ''
+        
+        pythonProcess.stdout.on('data', (data) => {
+            pythonOutput += data.toString()
+        })
+        
+        pythonProcess.stderr.on('data', (data) => {
+            pythonError += data.toString()
+        })
+        
+        await new Promise((resolve, reject) => {
+            pythonProcess.on('close', (code) => {
+                if (code !== 0) {
+                    console.error('❌ Python解析失败:', pythonError)
+                    reject(new Error(`Python解析失败: ${pythonError}`))
+                } else {
+                    resolve()
+                }
+            })
+        })
+        
+        // 解析Python输出的JSON
+        const parseResult = JSON.parse(pythonOutput)
+        
+        if (!parseResult.success) {
+            throw new Error(parseResult.error || 'Python解析失败')
+        }
+        
+        const parsed = parseResult.data
+        
+        console.log('✅ Python解析成功:')
+        console.log('  【罪犯构成】')
+        console.log('    在押罪犯总数:', parsed.prisoners.total)
+        console.log('    重大刑事犯:', parsed.prisoners.majorCriminal)
+        console.log('    死缓犯:', parsed.prisoners.deathSuspended)
+        console.log('    无期犯:', parsed.prisoners.lifeSentence)
+        console.log('    涉黑罪犯:', parsed.prisoners.gangRelated)
+        console.log('    涉恶罪犯:', parsed.prisoners.evilRelated)
+        console.log('    新收押罪犯:', parsed.prisoners.newlyAdmitted)
+        console.log('  【违纪统计】')
+        console.log('    违规人数:', parsed.discipline.violationCount)
+        console.log('    禁闭人数:', parsed.discipline.confinementCount)
+        console.log('    警告人数:', parsed.discipline.warningCount)
+        console.log('  【监管安全】')
+        console.log('    脱逃:', parsed.security.hasEscape ? '有' : '无')
+        console.log('    重大案件:', parsed.security.hasMajorCase ? '有' : '无')
+        console.log('    狱内发案:', parsed.security.hasInternalCase ? '有' : '无')
 
         // 准备入库数据
         const reportData = {
             prison_name: prisonName,  // 使用当前用户的派驻单位
-            report_month: reportMonth,  // 使用前端选择的月份
-            report_date: parsed.reportDate || null,
-            period: parsed.period || null,
+            report_month: uploadMonth,  // 使用前端选择的月份
 
             // 监管安全
             has_escape: parsed.security.hasEscape,
@@ -530,10 +743,62 @@ router.post('/criminal-report', uploadWord.single('file'), async (req, res) => {
             synced_at: syncedAt
         }
 
-        // 使用upsert更新或插入
+        // 使用upsert更新或插入到 criminal_reports 表
         const [record, created] = await CriminalReport.upsert(reportData, {
             conflictFields: ['prison_name', 'report_month']
         })
+        
+        console.log('💾 犯情动态数据已保存到 criminal_reports 表:')
+        console.log('  操作类型:', created ? '新增' : '更新')
+        console.log('  监狱:', reportData.prison_name)
+        console.log('  月份:', reportData.report_month)
+        console.log('  在押罪犯总数:', reportData.total_prisoners)
+        console.log('  涉黑罪犯:', reportData.gang_related)
+        console.log('  涉恶罪犯:', reportData.evil_related)
+        
+        // 🔥 关键：同步更新 monthly_basic_info 表（报告预览和清单使用的表）
+        // 查找或创建 monthly_basic_info 记录
+        const [basicInfo, basicCreated] = await MonthlyBasicInfo.findOrCreate({
+            where: {
+                prison_name: prisonName,
+                report_month: uploadMonth
+            },
+            defaults: {
+                user_id: req.user.id,
+                prison_name: prisonName,
+                report_month: uploadMonth
+            }
+        })
+        
+        // 更新基本信息（犯情动态数据优先级高于Excel统计）
+        await basicInfo.update({
+            // 罪犯构成
+            total_prisoners: reportData.total_prisoners || basicInfo.total_prisoners,
+            major_criminals: reportData.major_criminal || basicInfo.major_criminals,
+            death_sentence: reportData.death_suspended || basicInfo.death_sentence,
+            life_sentence: reportData.life_sentence || basicInfo.life_sentence,
+            repeat_offenders: reportData.multiple_convictions || basicInfo.repeat_offenders,
+            foreign_prisoners: reportData.foreign_prisoners || basicInfo.foreign_prisoners,
+            hk_macao_taiwan: reportData.hk_macao_taiwan || basicInfo.hk_macao_taiwan,
+            mental_illness: reportData.mental_illness || basicInfo.mental_illness,
+            former_officials: reportData.former_provincial || basicInfo.former_officials,
+            former_county_level: reportData.former_county || basicInfo.former_county_level,
+            falun_gong: reportData.falun_gong || basicInfo.falun_gong,
+            drug_history: reportData.drug_history || basicInfo.drug_history,
+            drug_crimes: reportData.drug_related || basicInfo.drug_crimes,
+            new_admissions: reportData.newly_admitted || basicInfo.new_admissions,
+            minor_females: reportData.juvenile_female || basicInfo.minor_females,
+            gang_related: reportData.gang_related || basicInfo.gang_related,
+            evil_forces: reportData.evil_related || basicInfo.evil_forces,
+            endangering_safety: reportData.dangerous_security || basicInfo.endangering_safety,
+            
+            // 违纪统计
+            recorded_punishments: reportData.violation_count || basicInfo.recorded_punishments,
+            confinement_punishments: reportData.confinement_count || basicInfo.confinement_punishments
+        })
+        
+        console.log('✅ 已同步更新 monthly_basic_info 表')
+        console.log('  现在报告预览和清单可以看到这些数据了！')
 
         res.json({
             success: true,
@@ -541,7 +806,7 @@ router.post('/criminal-report', uploadWord.single('file'), async (req, res) => {
             typeName: '犯情动态',
             syncBatch,
             prisonName,  // 使用用户的派驻单位
-            reportMonth,  // 使用前端选择的月份
+            uploadMonth,  // 使用前端选择的月份
             created,
             stats: {
                 total: 1,
@@ -550,7 +815,7 @@ router.post('/criminal-report', uploadWord.single('file'), async (req, res) => {
                 errors: 0
             },
             data: {
-                reportMonth,
+                reportMonth: uploadMonth,
                 prisonName: reportData.prison_name,
                 totalPrisoners: reportData.total_prisoners,
                 gangRelated: reportData.gang_related,
@@ -734,6 +999,41 @@ router.delete('/:syncBatch', requireAdmin, async (req, res) => {
     } catch (error) {
         console.error('撤销同步失败:', error)
         res.status(500).json({ error: '撤销同步失败' })
+    }
+})
+
+/**
+ * 获取指定月份的信件统计
+ * GET /api/template-sync/mail-stats/:month
+ */
+router.get('/mail-stats/:month', async (req, res) => {
+    try {
+        const { month } = req.params  // YYYY-MM格式
+        const prisonName = req.query.prison_name || req.user.prison_name
+
+        if (!prisonName) {
+            return res.status(400).json({ error: '缺少监狱名称参数' })
+        }
+
+        // 统计该月份的信件数量
+        const mailCount = await MailRecord.count({
+            where: {
+                prison_name: prisonName,
+                upload_month: month
+            }
+        })
+
+        res.json({
+            success: true,
+            data: {
+                month,
+                prisonName,
+                mailCount
+            }
+        })
+    } catch (error) {
+        console.error('获取信件统计失败:', error)
+        res.status(500).json({ error: '获取信件统计失败' })
     }
 })
 

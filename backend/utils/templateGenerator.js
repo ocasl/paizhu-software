@@ -151,7 +151,7 @@ async function generateLogFromTemplate(log, weeklyRecords = [], monthlyRecords =
  */
 async function generateReportFromTemplate(data) {
     try {
-        const { archive, dailyLogs, weeklyRecords, monthlyRecords, immediateEvents, attachments } = data
+        const { archive, dailyLogs, weeklyRecords, monthlyRecords, immediateEvents, attachments, basicInfo } = data
 
         // 读取模板
         const templateContent = fs.readFileSync(REPORT_TEMPLATE, 'binary')
@@ -160,7 +160,7 @@ async function generateReportFromTemplate(data) {
         // 计算统计数据
         const stats = calculateStats(dailyLogs, weeklyRecords, monthlyRecords)
 
-        // 获取犯情动态数据
+        // 获取犯情动态数据（作为备用数据源）
         const { CriminalReport } = require('../models')
         const reportMonth = `${archive.year}-${String(archive.month).padStart(2, '0')}`
         const criminalData = await CriminalReport.findOne({
@@ -170,6 +170,17 @@ async function generateReportFromTemplate(data) {
             }
         })
 
+        // 数据优先级：basicInfo（手动编辑） > criminalData（犯情动态） > 0（默认值）
+        const getFieldValue = (basicInfoField, criminalDataField, defaultValue = 0) => {
+            if (basicInfo && basicInfo[basicInfoField] !== null && basicInfo[basicInfoField] !== undefined) {
+                return basicInfo[basicInfoField]
+            }
+            if (criminalData && criminalData[criminalDataField] !== null && criminalData[criminalDataField] !== undefined) {
+                return criminalData[criminalDataField]
+            }
+            return defaultValue
+        }
+
         // 准备59个占位符的值（按模板顺序）
         const values = {
             // 标题 (1-3)
@@ -177,77 +188,77 @@ async function generateReportFromTemplate(data) {
             2: archive.year,
             3: archive.month,
 
-            // 一、(一) 罪犯构成情况 (4-21)
-            4: criminalData?.total_prisoners || 0,
-            5: criminalData?.major_criminal || 0,
-            6: criminalData?.death_suspended || 0,
-            7: criminalData?.life_sentence || 0,
-            8: criminalData?.multiple_convictions || 0,
-            9: criminalData?.foreign_prisoners || 0,
-            10: criminalData?.hk_macao_taiwan || 0,
-            11: criminalData?.mental_illness || 0,
-            12: criminalData?.former_provincial || 0,
-            13: criminalData?.former_county || 0,
-            14: criminalData?.falun_gong || 0,
-            15: criminalData?.drug_history || 0,
-            16: criminalData?.drug_related || 0,
-            17: criminalData?.newly_admitted || 0,
-            18: criminalData?.juvenile_female || 0,
-            19: criminalData?.gang_related || 0,
-            20: criminalData?.evil_related || 0,
-            21: criminalData?.dangerous_security || 0,
+            // 一、(一) 罪犯构成情况 (4-21) - 使用 basicInfo 优先
+            4: getFieldValue('total_prisoners', 'total_prisoners'),
+            5: getFieldValue('major_criminals', 'major_criminal'),
+            6: getFieldValue('death_sentence', 'death_suspended'),
+            7: getFieldValue('life_sentence', 'life_sentence'),
+            8: getFieldValue('repeat_offenders', 'multiple_convictions'),
+            9: getFieldValue('foreign_prisoners', 'foreign_prisoners'),
+            10: getFieldValue('hk_macao_taiwan', 'hk_macao_taiwan'),
+            11: getFieldValue('mental_illness', 'mental_illness'),
+            12: getFieldValue('former_officials', 'former_provincial'),
+            13: getFieldValue('former_county_level', 'former_county'),
+            14: getFieldValue('falun_gong', 'falun_gong'),
+            15: getFieldValue('drug_history', 'drug_history'),
+            16: getFieldValue('drug_crimes', 'drug_related'),
+            17: getFieldValue('new_admissions', 'newly_admitted'),
+            18: getFieldValue('minor_females', 'juvenile_female'),
+            19: getFieldValue('gang_related', 'gang_related'),
+            20: getFieldValue('evil_forces', 'evil_related'),
+            21: getFieldValue('endangering_safety', 'dangerous_security'),
 
             // 一、(二) 新收押/刑满释放 (22-23)
-            22: criminalData?.newly_admitted || 0,
-            23: 0, // 刑满释放（暂无数据源）
+            22: getFieldValue('new_admissions', 'newly_admitted'),
+            23: getFieldValue('released_count', null),
 
             // 一、(三) 记过/禁闭 (24-27)
-            24: criminalData?.violation_count || 0,
-            25: '无', // 记过原因（暂无数据源）
-            26: criminalData?.confinement_count || 0,
-            27: '无', // 禁闭原因（暂无数据源）
+            24: getFieldValue('recorded_punishments', 'violation_count'),
+            25: basicInfo?.recorded_punishments_reason || '无',
+            26: getFieldValue('confinement_punishments', 'confinement_count'),
+            27: basicInfo?.confinement_reason || '无',
 
-            // 二 减刑相关 (28-31)
+            // 二 减刑相关 (28-31) - 🔥 从 basicInfo 读取
             28: archive.prison_name || '监狱',
-            29: 0, // 减刑批次（暂无数据源）
-            30: 0, // 减刑案件数（暂无数据源）
-            31: 0, // 减刑阶段（暂无数据源）
+            29: basicInfo?.parole_batch || '',
+            30: basicInfo?.parole_count || 0,
+            31: basicInfo?.parole_stage || '',
 
             // 二、(二) 收押释放检察 (32-33)
-            32: criminalData?.newly_admitted || 0,
-            33: 0, // 刑满释放
+            32: getFieldValue('new_admissions', 'newly_admitted'),
+            33: getFieldValue('released_count', null),
 
-            // 二、(三) 监管执法检察 (34-41)
+            // 二、(三) 监管执法检察 (34-41) - 🔥 从 basicInfo 读取
             34: archive.prison_name || '监狱',
-            35: 0, // 减刑批次
-            36: '无', // 违法问题描述
-            37: 0, // 纠正违法通知书数量
-            38: stats.threeSceneChecks || 0,
-            39: stats.keyLocationChecks || 0,
-            40: stats.visitChecks || 0,
-            41: 0, // 发现违法问题数量
+            35: basicInfo?.parole_batch || '',
+            36: basicInfo?.correction_issues || '无',
+            37: basicInfo?.correction_notices || 0,
+            38: basicInfo?.three_scene_checks || 0,
+            39: basicInfo?.key_location_checks || 0,
+            40: basicInfo?.visit_checks || 0,
+            41: basicInfo?.visit_illegal_count || 0,
 
-            // 三、安全防范检察 (42-43)
-            42: stats.monitorChecks || 0,
-            43: 0, // 发现问题数量
+            // 三、安全防范检察 (42-43) - 🔥 从 basicInfo 读取
+            42: basicInfo?.monitor_checks || 0,
+            43: basicInfo?.issues_found || 0,
 
-            // 四、谈话情况 (44-49)
-            44: stats.totalTalks || 0,
-            45: stats.newAdmissionTalks || 0,
-            46: stats.evilTalks || 0,
-            47: stats.injuryTalks || 0,
-            48: stats.confinementTalks || 0,
-            49: 0, // 问卷数量（暂无数据源）
+            // 四、谈话情况 (44-49) - 🔥 从 basicInfo 读取
+            44: basicInfo?.total_talks || 0,
+            45: basicInfo?.new_admission_talks || 0,
+            46: basicInfo?.evil_forces_talks || 0,
+            47: basicInfo?.injury_talks || 0,
+            48: basicInfo?.confinement_talks || 0,
+            49: basicInfo?.questionnaire_count || 0,
 
-            // 五、会议活动 (50-53)
-            50: 0, // 评审会次数
-            51: 0, // 减刑批次
-            52: 0, // 犯情分析会次数
-            53: '日常', // 其他活动
+            // 五、会议活动 (50-53) - 🔥 从 basicInfo 读取
+            50: basicInfo?.life_sentence_reviews || 0,
+            51: basicInfo?.parole_batch || '',
+            52: basicInfo?.analysis_meetings || 0,
+            53: basicInfo?.other_activities || '日常',
 
-            // 六、其他工作 (54-55)
-            54: stats.mailboxOpens || 0,
-            55: stats.lettersReceived || 0,
+            // 六、其他工作 (54-55) - 🔥 从 basicInfo 读取信件数量
+            54: basicInfo?.mailbox_opens || 0,
+            55: basicInfo?.letters_received || 0,
 
             // 落款 (56-59)
             56: archive.prison_name || '监狱',
@@ -278,12 +289,13 @@ async function generateReportFromTemplate(data) {
 
 /**
  * 生成事项清单（使用带占位符的模板）
+ * 🔥 优先从数据库读取清单数据，如果没有则使用自动生成的数据
  * @param {Object} data - 清单数据
  * @returns {Promise<Buffer>} - 文档Buffer
  */
 async function generateChecklistFromTemplate(data) {
     try {
-        const { archive, dailyLogs, weeklyRecords, monthlyRecords, immediateEvents } = data
+        const { archive } = data
         
         console.log('使用带占位符的模板生成事项清单...')
         
@@ -300,201 +312,49 @@ async function generateChecklistFromTemplate(data) {
             nullGetter: () => '' // 空值返回空字符串
         })
         
-        // 生成16项检察情况
-        const statusTexts = []
-        const contentTexts = []
-        
-        // 1. 及时检察事件 - 脱逃、自伤自残、自杀死亡、重大疫情、重大生产安全事故
-        const event1 = immediateEvents.filter(e => {
-            const t = e.event_type || ''
-            return t.includes('脱逃') || t.includes('自伤') || t.includes('自杀') || t.includes('疫情') || t.includes('安全事故')
+        // 🔥 从数据库读取清单数据
+        const { ReportChecklistItem } = require('../models')
+        const dbChecklistItems = await ReportChecklistItem.findAll({
+            where: {
+                prison_name: archive.prison_name,
+                year: archive.year,
+                month: archive.month
+            },
+            order: [['item_id', 'ASC']]
         })
-        statusTexts[0] = event1.length > 0 ? `已检察 ${event1.length} 次` : '本月无此类事件'
-        contentTexts[0] = event1.length > 0 ? event1.map(e => e.title || '').join('；') : '本月无此类事件'
         
-        // 2. 罪犯死亡
-        const event2 = immediateEvents.filter(e => (e.event_type || '').includes('死亡'))
-        statusTexts[1] = event2.length > 0 ? `已检察 ${event2.length} 次` : '本月无此类事件'
-        contentTexts[1] = event2.length > 0 ? event2.map(e => e.title || '').join('；') : '本月无此类事件'
-        
-        // 3. 重大监管改造业务活动
-        const event3 = immediateEvents.filter(e => (e.event_type || '').includes('重大活动'))
-        statusTexts[2] = event3.length > 0 ? `已检察 ${event3.length} 次` : '本月无此类事件'
-        contentTexts[2] = event3.length > 0 ? event3.map(e => e.title || '').join('；') : '本月无此类事件'
-        
-        // 4. 民警处罚
-        const event4 = immediateEvents.filter(e => (e.event_type || '').includes('处罚'))
-        statusTexts[3] = event4.length > 0 ? `已检察 ${event4.length} 次` : '本月无此类事件'
-        contentTexts[3] = event4.length > 0 ? event4.map(e => e.title || '').join('；') : '本月无此类事件'
-        
-        // 5. 新任职领导
-        const event5 = immediateEvents.filter(e => (e.event_type || '').includes('领导'))
-        statusTexts[4] = event5.length > 0 ? `已检察 ${event5.length} 次` : '本月无此类事件'
-        contentTexts[4] = event5.length > 0 ? event5.map(e => e.title || '').join('；') : '本月无此类事件'
-        
-        // 6. 减刑假释
-        const event6 = immediateEvents.filter(e => {
-            const t = e.event_type || ''
-            return t.includes('减刑') || t.includes('假释') || t.includes('监外执行')
-        })
-        statusTexts[5] = event6.length > 0 ? `已检察 ${event6.length} 次` : '本月无此类事件'
-        contentTexts[5] = event6.length > 0 ? event6.map(e => e.title || '').join('；') : '本月无此类事件'
-        
-        // 7. 监控抽查（每日）
-        const monitorChecks = dailyLogs.filter(log => log.monitor_check?.checked)
-        statusTexts[6] = monitorChecks.length > 0 ? `已检察 ${monitorChecks.length} 次` : '未检察'
-        contentTexts[6] = monitorChecks.length > 0 
-            ? `本月共抽查监控 ${monitorChecks.reduce((sum, log) => sum + (log.monitor_check?.count || 1), 0)} 次`
-            : '本月未进行监控抽查'
-        
-        // 8. 医院禁闭室（每周）
-        const hospitalChecks = weeklyRecords.filter(r => r.hospital_check?.checked)
-        statusTexts[7] = hospitalChecks.length > 0 ? `已检察 ${hospitalChecks.length} 次` : '未检察'
-        contentTexts[7] = hospitalChecks.length > 0
-            ? `检察医院禁闭室 ${hospitalChecks.length} 次，重点查看警械使用、严管禁闭适用情况`
-            : '本月未进行医院禁闭室检察'
-        
-        // 9. 外伤检察（每周）
-        const injuryTalks = weeklyRecords.filter(r => 
-            r.talk_records?.some(t => t.type === 'injury')
-        )
-        const injuryCount = injuryTalks.reduce((sum, r) => 
-            sum + (r.talk_records?.filter(t => t.type === 'injury').length || 0), 0
-        )
-        statusTexts[8] = injuryCount > 0 ? `发现外伤 ${injuryCount} 人次` : '未发现外伤'
-        contentTexts[8] = injuryCount > 0 ? `本月发现外伤 ${injuryCount} 人次，已核实并上传谈话笔录` : '本月未发现外伤'
-        
-        // 10. 谈话情况（每周）
-        const allTalks = weeklyRecords.flatMap(r => r.talk_records || [])
-        const talkCount = allTalks.length
-        const newPrisonerTalks = allTalks.filter(t => t.type === 'newPrisoner').length
-        const releaseTalks = allTalks.filter(t => t.type === 'release').length
-        statusTexts[9] = talkCount > 0 ? `已谈话 ${talkCount} 人次` : '未谈话'
-        contentTexts[9] = talkCount > 0 
-            ? `本月谈话 ${talkCount} 人次，其中新入监 ${newPrisonerTalks} 人，刑释前 ${releaseTalks} 人`
-            : '本月未进行谈话'
-        
-        // 11. 信箱（每周）
-        const mailboxOpens = weeklyRecords.reduce((sum, r) => 
-            sum + (r.mailbox?.openCount || 0), 0
-        )
-        const lettersReceived = weeklyRecords.reduce((sum, r) => 
-            sum + (r.mailbox?.receivedCount || 0), 0
-        )
-        statusTexts[10] = mailboxOpens > 0 ? `开启 ${mailboxOpens} 次，收到信件 ${lettersReceived} 封` : '未开启'
-        contentTexts[10] = mailboxOpens > 0 
-            ? `本月开启检察官信箱 ${mailboxOpens} 次，收到信件 ${lettersReceived} 封`
-            : '本月未开启检察官信箱'
-        
-        // 12. 违禁品（每周）
-        const contrabandChecks = weeklyRecords.filter(r => r.contraband?.checked)
-        const contrabandFound = weeklyRecords.filter(r => r.contraband?.found)
-        statusTexts[11] = contrabandFound.length > 0 
-            ? `发现违禁品 ${contrabandFound.reduce((sum, r) => sum + (r.contraband?.foundCount || 0), 0)} 次`
-            : '未发现违禁品'
-        contentTexts[11] = contrabandChecks.length > 0
-            ? `本月排查 ${contrabandChecks.length} 次${contrabandFound.length > 0 ? `，发现违禁品 ${contrabandFound.reduce((sum, r) => sum + (r.contraband?.foundCount || 0), 0)} 次` : '，未发现违禁品'}`
-            : '本月未进行违禁品排查'
-        
-        // 13. 会见场所（每月）
-        const visitChecks = monthlyRecords.filter(r => r.visit_check?.checked)
-        const visitCount = monthlyRecords.reduce((sum, r) => 
-            sum + (r.visit_check?.visitCount || 0), 0
-        )
-        statusTexts[12] = visitChecks.length > 0 ? `已检察 ${visitCount} 次` : '未检察'
-        contentTexts[12] = visitChecks.length > 0 
-            ? `本月检察会见场所 ${visitCount} 次`
-            : '本月未进行会见场所检察'
-        
-        // 14. 犯情分析会（每月）
-        const meetingRecords = monthlyRecords.filter(r => r.meeting?.participated)
-        const meetingCount = meetingRecords.reduce((sum, r) => sum + (r.meeting?.count || 1), 0)
-        statusTexts[13] = meetingCount > 0 ? `已参加 ${meetingCount} 次` : '未参加'
-        contentTexts[13] = meetingCount > 0 
-            ? `本月参加犯情分析会 ${meetingCount} 次`
-            : '本月未参加犯情分析会'
-        
-        // 15. 记过处分（每月）
-        const punishmentRecords = monthlyRecords.filter(r => r.punishment?.exists)
-        const recordCount = punishmentRecords.reduce((sum, r) => sum + (r.punishment?.recordCount || 0), 0)
-        const confinementCount = punishmentRecords.reduce((sum, r) => sum + (r.punishment?.confinementCount || 0), 0)
-        statusTexts[14] = (recordCount > 0 || confinementCount > 0)
-            ? `记过 ${recordCount} 人，禁闭 ${confinementCount} 人`
-            : '本月无记过处分'
-        contentTexts[14] = (recordCount > 0 || confinementCount > 0)
-            ? `本月记过 ${recordCount} 人，禁闭 ${confinementCount} 人`
-            : '本月无记过处分'
-        
-        // 16. 勤杂岗位（每月）
-        const positionRecords = monthlyRecords.filter(r => r.position_stats)
-        if (positionRecords.length > 0) {
-            const latest = positionRecords[positionRecords.length - 1]
-            const stats = latest.position_stats
-            const totalIncrease = (stats?.miscellaneousIncrease || 0) + (stats?.productionIncrease || 0)
-            const totalDecrease = (stats?.miscellaneousDecrease || 0) + (stats?.productionDecrease || 0)
-            statusTexts[15] = (totalIncrease > 0 || totalDecrease > 0)
-                ? `增加 ${totalIncrease} 人，减少 ${totalDecrease} 人`
-                : '无异常变动'
-            contentTexts[15] = (totalIncrease > 0 || totalDecrease > 0)
-                ? `本月勤杂岗位和辅助生产岗位增加 ${totalIncrease} 人，减少 ${totalDecrease} 人`
-                : '本月勤杂岗位和辅助生产岗位无异常变动'
-        } else {
-            statusTexts[15] = '无异常变动'
-            contentTexts[15] = '本月勤杂岗位和辅助生产岗位无异常变动'
-        }
+        console.log(`从数据库查询到 ${dbChecklistItems.length} 条清单数据`)
         
         // 准备模板数据
         const templateData = {
             prison_name: archive.prison_name || '女子监狱',
             year: String(archive.year),
-            month: String(archive.month),
-            
-            // 16项检察情况
-            status1: statusTexts[0],
-            status2: statusTexts[1],
-            status3: statusTexts[2],
-            status4: statusTexts[3],
-            status5: statusTexts[4],
-            status6: statusTexts[5],
-            status7: statusTexts[6],
-            status8: statusTexts[7],
-            status9: statusTexts[8],
-            status10: statusTexts[9],
-            status11: statusTexts[10],
-            status12: statusTexts[11],
-            status13: statusTexts[12],
-            status14: statusTexts[13],
-            status15: statusTexts[14],
-            status16: statusTexts[15],
-            
-            // 16项报告内容
-            content1: contentTexts[0],
-            content2: contentTexts[1],
-            content3: contentTexts[2],
-            content4: contentTexts[3],
-            content5: contentTexts[4],
-            content6: contentTexts[5],
-            content7: contentTexts[6],
-            content8: contentTexts[7],
-            content9: contentTexts[8],
-            content10: contentTexts[9],
-            content11: contentTexts[10],
-            content12: contentTexts[11],
-            content13: contentTexts[12],
-            content14: contentTexts[13],
-            content15: contentTexts[14],
-            content16: contentTexts[15]
+            month: String(archive.month)
         }
         
-        console.log('模板数据:', {
+        // 填充16个项目的数据
+        for (let i = 1; i <= 16; i++) {
+            const dbItem = dbChecklistItems.find(item => item.item_id === i)
+            
+            if (dbItem) {
+                // 🔥 使用数据库中的数据
+                templateData[`content${i}`] = dbItem.content || ''
+                templateData[`status${i}`] = dbItem.situation || ''
+                console.log(`项目${i}: 使用数据库数据`)
+            } else {
+                // 如果数据库没有数据，使用空字符串
+                templateData[`content${i}`] = ''
+                templateData[`status${i}`] = ''
+                console.log(`项目${i}: 数据库无数据，使用空字符串`)
+            }
+        }
+        
+        console.log('模板数据示例:', {
             prison_name: templateData.prison_name,
             year: templateData.year,
             month: templateData.month,
-            status1: templateData.status1,
             content1: templateData.content1,
-            content7: templateData.content7,
-            content8: templateData.content8,
-            content10: templateData.content10
+            status1: templateData.status1
         })
         
         // 填充模板
@@ -502,7 +362,7 @@ async function generateChecklistFromTemplate(data) {
         
         const buffer = doc.getZip().generate({ type: 'nodebuffer' })
         
-        console.log('✅ 事项清单生成成功（使用带占位符的模板）')
+        console.log('✅ 事项清单生成成功（使用数据库数据）')
         console.log(`文件大小: ${buffer.length} bytes`)
         
         return buffer

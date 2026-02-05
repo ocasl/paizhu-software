@@ -16,7 +16,8 @@ import {
   Setting,
   List,
   FolderOpened,
-  User
+  User,
+  Collection
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -67,7 +68,8 @@ const menuItems = computed(() => {
     { path: '/upload', title: '材料上传', icon: Upload, roles: ['admin', 'inspector'] },
     { path: '/checklist', title: '报告清单', icon: List, roles: ['admin', 'inspector', 'leader', 'top_viewer'] },
     { path: '/report', title: '报告预览', icon: DataAnalysis, roles: ['admin', 'inspector', 'leader', 'top_viewer'] },
-    { path: '/archive', title: '月度归档', icon: FolderOpened, roles: ['admin', 'inspector', 'leader', 'top_viewer'] },  // 所有角色都可以访问
+    { path: '/archive', title: '月度归档', icon: FolderOpened, roles: ['admin', 'inspector', 'leader', 'top_viewer'] },
+    { path: '/compilation', title: '汇编', icon: Collection, roles: ['admin', 'inspector', 'leader', 'top_viewer'] },
     { path: '/settings', title: '系统设置', icon: Setting, roles: ['admin'] }
   ]
   
@@ -189,7 +191,7 @@ function logout() {
                 <el-dropdown-item disabled>
                   {{ currentUser?.prisonName || '派驻监所' }}
                 </el-dropdown-item>
-                <el-dropdown-item divided command="settings">系统设置</el-dropdown-item>
+                <el-dropdown-item v-if="isAdminUser" divided command="settings">系统设置</el-dropdown-item>
                 <el-dropdown-item command="logout" style="color: #F56C6C;">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>

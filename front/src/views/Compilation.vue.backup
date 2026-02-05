@@ -1,0 +1,942 @@
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { useUserStore } from '../stores/user'
+import axios from 'axios'
+
+const userStore = useUserStore()
+const isAdmin = computed(() => userStore.userInfo?.role === 'admin')
+
+// API 配置
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+
+function getToken() {
+  return localStorage.getItem('token')
+}
+
+// 创建 axios 实例并配置拦截器
+const api = axios.create({
+  baseURL: API_BASE,
+  headers: { 'Content-Type': 'application/json' }
+})
+
+api.interceptors.request.use(config => {
+  const token = getToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// 数据
+const categories = ref([])
+const documents = ref([])
+const loading = ref(false)
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(20)
+
+// 搜索和筛选
+const keyword = ref('')
+const selectedCategory = ref('')
+
+// 对话框
+const categoryDialogVisible = ref(false)
+const categoryFormMode = ref('add') // 'add' or 'edit'
+const categoryForm = ref({
+  id: null,
+  name: '',
+  description: '',
+  sort_order: 0,
+  is_active: true
+})
+
+const uploadDialogVisible = ref(false)
+const uploadForm = ref({
+  title: '',
+  description: '',
+  category_id: '',
+  file: null
+})
+const uploadFileList = ref([])
+
+const editDialogVisible = ref(false)
+const editForm = ref({
+  id: null,
+  title: '',
+  description: '',
+  category_id: ''
+})
+
+const pdfPreviewVisible = ref(false)
+const pdfPreviewUrl = ref('')
+const docxPreviewVisible = ref(false)
+const docxPreviewHtml = ref('')
+
+// 获取分类列表
+async function fetchCategories() {
+  try {
+    const res = await api.get('/api/compilation/categories')
+    if (res.data.success) {
+      categories.value = res.data.data
+    }
+  } catch (error) {
+    console.error('获取分类失败:', error)
+    ElMessage.error('获取分类失败')
+  }
+}
+
+// 获取文档列表
+async function fetchDocuments() {
+  loading.value = true
+  try {
+    const params = {
+      page: currentPage.value,
+      limit: pageSize.value
+    }
+    if (keyword.value) params.keyword = keyword.value
+    if (selectedCategory.value) params.category_id = selectedCategory.value
+
+    const res = await api.get('/api/compilation/documents', { params })
+    if (res.data.success) {
+      documents.value = res.data.data.documents
+      total.value = res.data.data.total
+    }
+  } catch (error) {
+    console.error('获取文档失败:', error)
+    ElMessage.error('获取文档失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+// 搜索
+function handleSearch() {
+  currentPage.value = 1
+  fetchDocuments()
+}
+
+// 分类筛选
+function handleCategoryFilter() {
+  currentPage.value = 1
+  fetchDocuments()
+}
+
+// 分页
+function handlePageChange(page) {
+  currentPage.value = page
+  fetchDocuments()
+}
+
+// ========== 分类管理 ==========
+
+function openCategoryDialog(mode = 'add', category = null) {
+  categoryFormMode.value = mode
+  if (mode === 'edit' && category) {
+    categoryForm.value = { ...category }
+  } else {
+    categoryForm.value = {
+      id: null,
+      name: '',
+      description: '',
+      sort_order: 0,
+      is_active: true
+    }
+  }
+  categoryDialogVisible.value = true
+}
+
+async function submitCategoryForm() {
+  try {
+    if (!categoryForm.value.name) {
+      ElMessage.warning('请输入分类名称')
+      return
+    }
+
+    if (categoryFormMode.value === 'add') {
+      const res = await api.post('/api/compilation/categories', categoryForm.value)
+      if (res.data.success) {
+        ElMessage.success('分类添加成功')
+        categoryDialogVisible.value = false
+        fetchCategories()
+      }
+    } else {
+      const res = await api.put(`/api/compilation/categories/${categoryForm.value.id}`, categoryForm.value)
+      if (res.data.success) {
+        ElMessage.success('分类更新成功')
+        categoryDialogVisible.value = false
+        fetchCategories()
+        fetchDocuments()
+      }
+    }
+  } catch (error) {
+    console.error('保存分类失败:', error)
+    ElMessage.error(error.response?.data?.message || '保存分类失败')
+  }
+}
+
+async function deleteCategory(category) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除分类"${category.name}"吗？`,
+      '删除确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    const res = await api.delete(`/api/compilation/categories/${category.id}`)
+    if (res.data.success) {
+      ElMessage.success('分类删除成功')
+      fetchCategories()
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除分类失败:', error)
+      ElMessage.error(error.response?.data?.message || '删除分类失败')
+    }
+  }
+}
+
+// ========== 文档管理 ==========
+
+function openUploadDialog() {
+  uploadForm.value = {
+    title: '',
+    description: '',
+    category_id: '',
+    file: null
+  }
+  uploadFileList.value = []
+  uploadDialogVisible.value = true
+}
+
+function handleFileChange(file) {
+  uploadForm.value.file = file.raw
+}
+
+function handleFileRemove() {
+  uploadForm.value.file = null
+}
+
+async function submitUploadForm() {
+  try {
+    if (!uploadForm.value.title) {
+      ElMessage.warning('请输入文档标题')
+      return
+    }
+    if (!uploadForm.value.category_id) {
+      ElMessage.warning('请选择分类')
+      return
+    }
+    if (!uploadForm.value.file) {
+      ElMessage.warning('请选择文件')
+      return
+    }
+
+    const formData = new FormData()
+    formData.append('title', uploadForm.value.title)
+    formData.append('description', uploadForm.value.description || '')
+    formData.append('category_id', uploadForm.value.category_id)
+    formData.append('file', uploadForm.value.file)
+
+    const res = await api.post('/api/compilation/documents', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+
+    if (res.data.success) {
+      ElMessage.success('文档上传成功')
+      uploadDialogVisible.value = false
+      fetchDocuments()
+    }
+  } catch (error) {
+    console.error('上传文档失败:', error)
+    ElMessage.error(error.response?.data?.message || '上传文档失败')
+  }
+}
+
+function openEditDialog(doc) {
+  editForm.value = {
+    id: doc.id,
+    title: doc.title,
+    description: doc.description,
+    category_id: doc.category_id
+  }
+  editDialogVisible.value = true
+}
+
+async function submitEditForm() {
+  try {
+    if (!editForm.value.title) {
+      ElMessage.warning('请输入文档标题')
+      return
+    }
+
+    const res = await api.put(`/api/compilation/documents/${editForm.value.id}`, editForm.value)
+    if (res.data.success) {
+      ElMessage.success('文档更新成功')
+      editDialogVisible.value = false
+      fetchDocuments()
+    }
+  } catch (error) {
+    console.error('更新文档失败:', error)
+    ElMessage.error(error.response?.data?.message || '更新文档失败')
+  }
+}
+
+async function deleteDocument(doc) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除文档"${doc.title}"吗？`,
+      '删除确认',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    const res = await api.delete(`/api/compilation/documents/${doc.id}`)
+    if (res.data.success) {
+      ElMessage.success('文档删除成功')
+      fetchDocuments()
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除文档失败:', error)
+      ElMessage.error(error.response?.data?.message || '删除文档失败')
+    }
+  }
+}
+
+async function togglePin(doc) {
+  try {
+    const res = await api.put(`/api/compilation/documents/${doc.id}/pin`, {
+      is_pinned: !doc.is_pinned
+    })
+    if (res.data.success) {
+      ElMessage.success(doc.is_pinned ? '已取消置顶' : '已置顶')
+      fetchDocuments()
+    }
+  } catch (error) {
+    console.error('置顶操作失败:', error)
+    ElMessage.error('置顶操作失败')
+  }
+}
+
+function downloadDocument(doc) {
+  const token = getToken()
+  const url = `${API_BASE}/api/compilation/documents/${doc.id}/download`
+  
+  // 使用 fetch 下载并带上 token
+  fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`
+    }
+  })
+  .then(response => response.blob())
+  .then(blob => {
+    const blobUrl = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = doc.file_name
+    link.click()
+    window.URL.revokeObjectURL(blobUrl)
+  })
+  .catch(error => {
+    console.error('下载失败:', error)
+    ElMessage.error('下载失败')
+  })
+}
+
+function previewDocument(doc) {
+  if (doc.file_type === 'pdf') {
+    // PDF 预览
+    const token = getToken()
+    const url = `${API_BASE}/api/compilation/documents/${doc.id}/preview`
+    
+    fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('预览失败')
+      }
+      return response.blob()
+    })
+    .then(blob => {
+      const blobUrl = window.URL.createObjectURL(blob)
+      pdfPreviewUrl.value = blobUrl
+      pdfPreviewVisible.value = true
+    })
+    .catch(error => {
+      console.error('预览失败:', error)
+      ElMessage.error('预览失败，请尝试下载查看')
+    })
+  } else {
+    // DOCX 预览（转换为 HTML）
+    api.get(`/api/compilation/documents/${doc.id}/preview-docx`)
+      .then(res => {
+        if (res.data.success) {
+          docxPreviewHtml.value = res.data.data.html
+          docxPreviewVisible.value = true
+        }
+      })
+      .catch(error => {
+        console.error('预览失败:', error)
+        ElMessage.error('预览失败，请尝试下载查看')
+      })
+  }
+}
+
+// 格式化文件大小
+function formatFileSize(bytes) {
+  if (!bytes) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+}
+
+// 格式化日期
+function formatDate(date) {
+  if (!date) return ''
+  return new Date(date).toLocaleDateString('zh-CN')
+}
+
+// 置顶文档
+const pinnedDocuments = computed(() => {
+  return documents.value.filter(doc => doc.is_pinned)
+})
+
+// 普通文档（按分类分组）
+const documentsByCategory = computed(() => {
+  const normalDocs = documents.value.filter(doc => !doc.is_pinned)
+  const grouped = {}
+  
+  normalDocs.forEach(doc => {
+    const categoryName = doc.category?.name || '未分类'
+    if (!grouped[categoryName]) {
+      grouped[categoryName] = []
+    }
+    grouped[categoryName].push(doc)
+  })
+  
+  return grouped
+})
+
+onMounted(() => {
+  fetchCategories()
+  fetchDocuments()
+})
+</script>
+
+<template>
+  <div class="compilation-container">
+    <!-- 页面头部 -->
+    <div class="page-header">
+      <div class="header-left">
+        <h1 class="page-title">📚 汇编</h1>
+        <p class="page-subtitle">检察工作文档资料库</p>
+      </div>
+      <div class="header-right">
+        <el-button v-if="isAdmin" type="primary" @click="openCategoryDialog('add')">
+          管理分类
+        </el-button>
+        <el-button v-if="isAdmin" type="success" @click="openUploadDialog">
+          上传文档
+        </el-button>
+      </div>
+    </div>
+
+    <!-- 搜索和筛选 -->
+    <div class="filter-bar">
+      <el-input
+        v-model="keyword"
+        placeholder="搜索文档标题或描述..."
+        clearable
+        @clear="handleSearch"
+        @keyup.enter="handleSearch"
+        style="width: 400px"
+      >
+        <template #prefix>
+          <el-icon><Search /></el-icon>
+        </template>
+      </el-input>
+      
+      <el-select
+        v-model="selectedCategory"
+        placeholder="选择分类"
+        clearable
+        @change="handleCategoryFilter"
+        style="width: 200px; margin-left: 10px"
+      >
+        <el-option
+          v-for="cat in categories.filter(c => c.is_active)"
+          :key="cat.id"
+          :label="cat.name"
+          :value="cat.id"
+        />
+      </el-select>
+
+      <el-button type="primary" @click="handleSearch" style="margin-left: 10px">
+        搜索
+      </el-button>
+    </div>
+
+    <!-- 置顶文档 -->
+    <div v-if="pinnedDocuments.length > 0" class="pinned-section">
+      <div class="section-title">
+        <el-icon><Star /></el-icon>
+        <span>置顶文档 ({{ pinnedDocuments.length }})</span>
+      </div>
+      <div class="document-list">
+        <div v-for="doc in pinnedDocuments" :key="doc.id" class="document-card pinned">
+          <div class="doc-header">
+            <div class="doc-icon">
+              <el-icon v-if="doc.file_type === 'pdf'" color="#f56c6c" :size="24"><Document /></el-icon>
+              <el-icon v-else color="#409eff" :size="24"><Document /></el-icon>
+            </div>
+            <div class="doc-info">
+              <h3 class="doc-title">
+                <el-tag type="warning" size="small" style="margin-right: 8px">置顶</el-tag>
+                {{ doc.title }}
+              </h3>
+              <p class="doc-meta">
+                <el-tag size="small">{{ doc.category?.name }}</el-tag>
+                <span>{{ doc.file_type.toUpperCase() }}</span>
+                <span>{{ formatFileSize(doc.file_size) }}</span>
+                <span>{{ formatDate(doc.created_at) }}</span>
+              </p>
+              <p v-if="doc.description" class="doc-description">{{ doc.description }}</p>
+            </div>
+          </div>
+          <div class="doc-actions">
+            <el-button size="small" @click="previewDocument(doc)">
+              <el-icon><View /></el-icon> 预览
+            </el-button>
+            <el-button size="small" @click="downloadDocument(doc)">
+              <el-icon><Download /></el-icon> 下载
+            </el-button>
+            <template v-if="isAdmin">
+              <el-button size="small" @click="openEditDialog(doc)">
+                <el-icon><Edit /></el-icon> 编辑
+              </el-button>
+              <el-button size="small" @click="togglePin(doc)">
+                <el-icon><Star /></el-icon> 取消置顶
+              </el-button>
+              <el-button size="small" type="danger" @click="deleteDocument(doc)">
+                <el-icon><Delete /></el-icon> 删除
+              </el-button>
+            </template>
+          </div>
+          <div class="doc-stats">
+            <span><el-icon><View /></el-icon> {{ doc.view_count }}次</span>
+            <span><el-icon><Download /></el-icon> {{ doc.download_count }}次</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 文档列表（按分类分组） -->
+    <div v-loading="loading" class="documents-section">
+      <div v-for="(docs, categoryName) in documentsByCategory" :key="categoryName" class="category-group">
+        <div class="section-title">
+          <el-icon><Folder /></el-icon>
+          <span>{{ categoryName }} ({{ docs.length }})</span>
+        </div>
+        <div class="document-list">
+          <div v-for="doc in docs" :key="doc.id" class="document-card">
+            <div class="doc-header">
+              <div class="doc-icon">
+                <el-icon v-if="doc.file_type === 'pdf'" color="#f56c6c" :size="24"><Document /></el-icon>
+                <el-icon v-else color="#409eff" :size="24"><Document /></el-icon>
+              </div>
+              <div class="doc-info">
+                <h3 class="doc-title">{{ doc.title }}</h3>
+                <p class="doc-meta">
+                  <span>{{ doc.file_type.toUpperCase() }}</span>
+                  <span>{{ formatFileSize(doc.file_size) }}</span>
+                  <span>{{ formatDate(doc.created_at) }}</span>
+                </p>
+                <p v-if="doc.description" class="doc-description">{{ doc.description }}</p>
+              </div>
+            </div>
+            <div class="doc-actions">
+              <el-button size="small" @click="previewDocument(doc)">
+                <el-icon><View /></el-icon> 预览
+              </el-button>
+              <el-button size="small" @click="downloadDocument(doc)">
+                <el-icon><Download /></el-icon> 下载
+              </el-button>
+              <template v-if="isAdmin">
+                <el-button size="small" @click="openEditDialog(doc)">
+                  <el-icon><Edit /></el-icon> 编辑
+                </el-button>
+                <el-button size="small" @click="togglePin(doc)">
+                  <el-icon><Star /></el-icon> 置顶
+                </el-button>
+                <el-button size="small" type="danger" @click="deleteDocument(doc)">
+                  <el-icon><Delete /></el-icon> 删除
+                </el-button>
+              </template>
+            </div>
+            <div class="doc-stats">
+              <span><el-icon><View /></el-icon> {{ doc.view_count }}次</span>
+              <span><el-icon><Download /></el-icon> {{ doc.download_count }}次</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 空状态 -->
+      <el-empty v-if="!loading && documents.length === 0" description="暂无文档" />
+    </div>
+
+    <!-- 分页 -->
+    <div v-if="total > pageSize" class="pagination">
+      <el-pagination
+        v-model:current-page="currentPage"
+        :page-size="pageSize"
+        :total="total"
+        layout="total, prev, pager, next"
+        @current-change="handlePageChange"
+      />
+    </div>
+
+    <!-- 分类管理对话框 -->
+    <el-dialog
+      v-model="categoryDialogVisible"
+      :title="categoryFormMode === 'add' ? '添加分类' : '编辑分类'"
+      width="500px"
+    >
+      <el-form :model="categoryForm" label-width="100px">
+        <el-form-item label="分类名称" required>
+          <el-input v-model="categoryForm.name" placeholder="请输入分类名称" />
+        </el-form-item>
+        <el-form-item label="分类描述">
+          <el-input v-model="categoryForm.description" type="textarea" :rows="3" placeholder="请输入分类描述" />
+        </el-form-item>
+        <el-form-item label="排序">
+          <el-input-number v-model="categoryForm.sort_order" :min="0" />
+          <span style="margin-left: 10px; color: #909399; font-size: 12px">数字越小越靠前</span>
+        </el-form-item>
+        <el-form-item label="状态">
+          <el-switch v-model="categoryForm.is_active" active-text="启用" inactive-text="禁用" />
+        </el-form-item>
+      </el-form>
+      
+      <!-- 分类列表（编辑模式） -->
+      <div v-if="categoryFormMode === 'add'" style="margin-top: 20px">
+        <el-divider>现有分类</el-divider>
+        <el-table :data="categories" size="small">
+          <el-table-column prop="name" label="分类名称" />
+          <el-table-column prop="doc_count" label="文档数" width="80" />
+          <el-table-column prop="is_active" label="状态" width="80">
+            <template #default="{ row }">
+              <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
+                {{ row.is_active ? '启用' : '禁用' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="150">
+            <template #default="{ row }">
+              <el-button size="small" @click="openCategoryDialog('edit', row)">编辑</el-button>
+              <el-button size="small" type="danger" @click="deleteCategory(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="categoryDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitCategoryForm">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 上传文档对话框 -->
+    <el-dialog v-model="uploadDialogVisible" title="上传文档" width="600px">
+      <el-form :model="uploadForm" label-width="100px">
+        <el-form-item label="文档标题" required>
+          <el-input v-model="uploadForm.title" placeholder="请输入文档标题" />
+        </el-form-item>
+        <el-form-item label="文档描述">
+          <el-input v-model="uploadForm.description" type="textarea" :rows="3" placeholder="请输入文档描述" />
+        </el-form-item>
+        <el-form-item label="分类" required>
+          <el-select v-model="uploadForm.category_id" placeholder="请选择分类" style="width: 100%">
+            <el-option
+              v-for="cat in categories.filter(c => c.is_active)"
+              :key="cat.id"
+              :label="cat.name"
+              :value="cat.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="选择文件" required>
+          <el-upload
+            v-model:file-list="uploadFileList"
+            :auto-upload="false"
+            :limit="1"
+            :on-change="handleFileChange"
+            :on-remove="handleFileRemove"
+            accept=".pdf,.docx"
+          >
+            <el-button type="primary">选择文件</el-button>
+            <template #tip>
+              <div class="el-upload__tip">
+                只支持 PDF 和 DOCX 格式，文件大小不超过 50MB
+              </div>
+            </template>
+          </el-upload>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="uploadDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitUploadForm">上传</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 编辑文档对话框 -->
+    <el-dialog v-model="editDialogVisible" title="编辑文档" width="600px">
+      <el-form :model="editForm" label-width="100px">
+        <el-form-item label="文档标题" required>
+          <el-input v-model="editForm.title" placeholder="请输入文档标题" />
+        </el-form-item>
+        <el-form-item label="文档描述">
+          <el-input v-model="editForm.description" type="textarea" :rows="3" placeholder="请输入文档描述" />
+        </el-form-item>
+        <el-form-item label="分类" required>
+          <el-select v-model="editForm.category_id" placeholder="请选择分类" style="width: 100%">
+            <el-option
+              v-for="cat in categories.filter(c => c.is_active)"
+              :key="cat.id"
+              :label="cat.name"
+              :value="cat.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="submitEditForm">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- PDF 预览对话框 -->
+    <el-dialog v-model="pdfPreviewVisible" title="文档预览" width="80%" top="5vh">
+      <iframe :src="pdfPreviewUrl" style="width: 100%; height: 70vh; border: none" />
+    </el-dialog>
+
+    <!-- DOCX 预览对话框 -->
+    <el-dialog v-model="docxPreviewVisible" title="文档预览" width="80%" top="5vh">
+      <div class="docx-preview-container" v-html="docxPreviewHtml"></div>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.compilation-container {
+  padding: 20px;
+  background: #f5f7fa;
+  min-height: 100vh;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 20px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.header-left {
+  flex: 1;
+}
+
+.page-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #303133;
+  margin: 0 0 8px 0;
+}
+
+.page-subtitle {
+  font-size: 14px;
+  color: #909399;
+  margin: 0;
+}
+
+.header-right {
+  display: flex;
+  gap: 10px;
+}
+
+.filter-bar {
+  margin-bottom: 20px;
+  padding: 15px 20px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+}
+
+.pinned-section,
+.documents-section {
+  margin-bottom: 20px;
+}
+
+.category-group {
+  margin-bottom: 30px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 15px;
+  padding: 10px 15px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.document-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.document-card {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+}
+
+.document-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+}
+
+.document-card.pinned {
+  border: 2px solid #f56c6c;
+}
+
+.doc-header {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.doc-icon {
+  flex-shrink: 0;
+}
+
+.doc-info {
+  flex: 1;
+}
+
+.doc-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+  margin: 0 0 8px 0;
+}
+
+.doc-meta {
+  display: flex;
+  gap: 15px;
+  font-size: 13px;
+  color: #909399;
+  margin: 0 0 8px 0;
+}
+
+.doc-description {
+  font-size: 14px;
+  color: #606266;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.doc-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.doc-stats {
+  display: flex;
+  gap: 20px;
+  font-size: 13px;
+  color: #909399;
+  padding-top: 10px;
+  border-top: 1px solid #ebeef5;
+}
+
+.doc-stats span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+  padding: 20px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* DOCX 预览样式 */
+.docx-preview-container {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 20px;
+  background: white;
+  line-height: 1.8;
+}
+
+.docx-preview-container :deep(p) {
+  margin: 10px 0;
+}
+
+.docx-preview-container :deep(h1),
+.docx-preview-container :deep(h2),
+.docx-preview-container :deep(h3) {
+  margin: 20px 0 10px 0;
+  font-weight: 600;
+}
+
+.docx-preview-container :deep(img) {
+  max-width: 100%;
+  height: auto;
+}
+
+.docx-preview-container :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 15px 0;
+}
+
+.docx-preview-container :deep(table td),
+.docx-preview-container :deep(table th) {
+  border: 1px solid #ddd;
+  padding: 8px;
+}
+</style>

@@ -116,6 +116,22 @@ router.get('/generate-report', async (req, res) => {
             }
         })
 
+        // 获取基本信息
+        const { sequelize } = require('../models')
+        const [basicInfoResults] = await sequelize.query(`
+            SELECT * FROM monthly_basic_info
+            WHERE prison_name = :prisonName AND report_month = :reportMonth
+            LIMIT 1
+        `, {
+            replacements: { 
+                prisonName: prison_name, 
+                reportMonth: targetMonth 
+            }
+        })
+        
+        const basicInfo = basicInfoResults.length > 0 ? basicInfoResults[0] : null
+        console.log('基本信息:', basicInfo ? `找到数据，在押罪犯 ${basicInfo.total_prisoners} 人` : '未找到数据')
+
         // 生成报告
         const { generateReportFromTemplate } = require('../utils/templateGenerator')
 
@@ -143,7 +159,8 @@ router.get('/generate-report', async (req, res) => {
             weeklyRecords,
             monthlyRecords,
             immediateEvents,
-            attachments
+            attachments,
+            basicInfo  // 添加基本信息
         })
 
         // 设置响应头
@@ -188,7 +205,34 @@ router.post('/generate-checklist', async (req, res) => {
             }
         }
 
-        console.log('生成清单，参数:', { prison_name, year, month, checklistData: checklistData?.length })
+        console.log('生成清单，参数:', { prison_name, year, month })
+
+        // 🔥 从数据库读取清单数据
+        const { ReportChecklistItem } = require('../models')
+        const dbChecklistItems = await ReportChecklistItem.findAll({
+            where: {
+                prison_name,
+                year: parseInt(year),
+                month: parseInt(month)
+            },
+            order: [['item_id', 'ASC']]
+        })
+
+        console.log(`从数据库读取到 ${dbChecklistItems.length} 条清单数据`)
+
+        // 转换为模板需要的格式
+        const checklistDataFromDb = dbChecklistItems.map(item => ({
+            id: item.item_id,
+            content: item.content || '',
+            situation: item.situation || ''
+        }))
+
+        // 如果数据库没有数据，使用前端传来的数据（兼容旧逻辑）
+        const finalChecklistData = checklistDataFromDb.length > 0 
+            ? checklistDataFromDb 
+            : (checklistData || [])
+
+        console.log(`使用清单数据: ${finalChecklistData.length} 项`)
 
         // 创建临时归档对象
         const archive = {
@@ -201,7 +245,7 @@ router.post('/generate-checklist', async (req, res) => {
         const { generateChecklistFromFrontendData } = require('../utils/templateGenerator')
         const checklistBuffer = await generateChecklistFromFrontendData({
             archive,
-            checklistData: checklistData || []
+            checklistData: finalChecklistData
         })
 
         // 设置响应头

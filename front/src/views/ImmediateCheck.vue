@@ -19,6 +19,10 @@ const viewMode = ref('form')
 const historyEvents = ref([])
 const loadingHistory = ref(false)
 
+// 筛选条件
+const filterMonth = ref('')
+const filterDateRange = ref([])
+
 // 分页相关
 const currentEventPage = ref(1)
 const eventPageSize = ref(10)
@@ -162,6 +166,17 @@ async function loadHistoryEvents() {
       params.prison_name = selectedPrison.value
     }
     
+    // 月份筛选
+    if (filterMonth.value) {
+      params.month = filterMonth.value
+    }
+    
+    // 日期范围筛选
+    if (filterDateRange.value && filterDateRange.value.length === 2) {
+      params.startDate = filterDateRange.value[0]
+      params.endDate = filterDateRange.value[1]
+    }
+    
     const queryString = new URLSearchParams(params).toString()
     const url = `${API_BASE}/api/immediate-events${queryString ? '?' + queryString : ''}`
     
@@ -215,6 +230,14 @@ async function loadHistoryEvents() {
   } finally {
     loadingHistory.value = false
   }
+}
+
+// 清空筛选条件
+function clearEventFilters() {
+  filterMonth.value = ''
+  filterDateRange.value = []
+  selectedPrison.value = ''
+  loadHistoryEvents()
 }
 
 // 查看详情
@@ -360,6 +383,9 @@ async function addEventRecord() {
         formData.append('files', file.raw)
       })
       formData.append('category', 'immediate_event')
+      const eventDate = eventForm.event_date || new Date().toISOString().split('T')[0]
+      formData.append('log_date', eventDate)
+      formData.append('upload_month', eventDate.slice(0, 7))  // 根据事件日期设置归档月份
       
       const uploadResponse = await fetch(`${API_BASE}/api/attachments/upload`, {
         method: 'POST',
@@ -625,6 +651,37 @@ async function saveEditEvent() {
           </div>
         </div>
       </template>
+
+      <!-- 筛选控件 -->
+      <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center;">
+        <PrisonSelector 
+          v-model="selectedPrison" 
+          @change="onPrisonChange"
+          placeholder="选择监狱筛选"
+          :auto-select="false"
+          style="width: 200px;"
+        />
+        <el-date-picker
+          v-model="filterMonth"
+          type="month"
+          placeholder="选择月份"
+          format="YYYY年MM月"
+          value-format="YYYY-MM"
+          @change="loadHistoryEvents"
+          style="width: 180px;"
+        />
+        <el-date-picker
+          v-model="filterDateRange"
+          type="daterange"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          @change="loadHistoryEvents"
+          style="width: 280px;"
+        />
+        <el-button @click="clearEventFilters">清空筛选</el-button>
+      </div>
 
       <!-- 批量操作提示 -->
       <div v-if="selectedEvents.length > 0" style="margin-bottom: 16px; display: flex; justify-content: flex-end;">

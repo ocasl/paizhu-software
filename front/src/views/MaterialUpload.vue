@@ -199,13 +199,32 @@ async function refreshReportData() {
     const startDate = `${year}-${monthNum}-01`
     const endDate = new Date(parseInt(year), parseInt(monthNum), 0).toISOString().split('T')[0]
     
-    // 重新加载基本信息（包含Excel统计数据）
-    const response = await fetch(`${API_BASE}/monthly-basic-info/${month}`, {
-      headers: getAuthHeaders()
-    })
+    // 获取当前用户的监狱名称
+    const user = JSON.parse(localStorage.getItem('user') || '{}')
+    const prisonName = user.prison_name || user.prisonName || ''
     
-    if (response.ok || response.status === 404) {
-      const data = response.ok ? await response.json() : { success: true, data: null }
+    // 并行加载基本信息和信件统计
+    const promises = [
+      fetch(`${API_BASE}/monthly-basic-info/${month}${prisonName ? `?prison_name=${prisonName}` : ''}`, {
+        headers: getAuthHeaders()
+      })
+    ]
+    
+    // 如果有监狱名称，加载信件统计
+    if (prisonName) {
+      promises.push(
+        fetch(`${API_BASE}/template-sync/mail-stats/${month}?prison_name=${prisonName}`, {
+          headers: getAuthHeaders()
+        })
+      )
+    }
+    
+    const responses = await Promise.all(promises)
+    const [basicInfoRes, mailStatsRes] = responses
+    
+    // 处理基本信息
+    if (basicInfoRes.ok || basicInfoRes.status === 404) {
+      const data = basicInfoRes.ok ? await basicInfoRes.json() : { success: true, data: null }
       
       // 更新reportStore的基本信息
       if (data.data) {
@@ -242,6 +261,17 @@ async function refreshReportData() {
           confinementPunishments: info.confinement_punishments,
           recordedPunishments: info.recorded_punishments
         })
+      }
+    }
+    
+    // 🔥 处理信件统计
+    if (mailStatsRes && mailStatsRes.ok) {
+      const mailData = await mailStatsRes.json()
+      if (mailData.success && mailData.data) {
+        // 延迟设置，确保覆盖 watch 的计算值
+        setTimeout(() => {
+          reportStore.setMailCount(mailData.data.mailCount || 0)
+        }, 100)
       }
     }
   } catch (error) {
@@ -369,7 +399,7 @@ async function handleSyncUpload(categoryId, file) {
   try {
     const formData = new FormData()
     formData.append('file', file)
-    formData.append('month', selectedMonth.value)  // 添加月份参数
+    formData.append('upload_month', selectedMonth.value)  // 数据归属月份
     
     console.log(`📤 上传数据抓取材料: ${category.name}`)
     console.log(`  归属月份: ${selectedMonth.value}`)

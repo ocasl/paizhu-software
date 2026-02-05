@@ -25,170 +25,73 @@ router.get('/:month', async (req, res) => {
             return res.status(400).json({ error: '用户未设置派驻单位，且未指定监狱名称' })
         }
 
-        // 查询该月份的基本信息（通过JOIN用户表按监狱名称查询）
+        // 查询该月份的基本信息（直接按监狱名称查询，不需要JOIN）
         const [results] = await sequelize.query(`
-            SELECT mbi.* 
-            FROM monthly_basic_info mbi
-            JOIN users u ON mbi.user_id = u.id
-            WHERE u.prison_name = :prisonName AND mbi.report_month = :month
-            LIMIT 1
-        `, {
-            replacements: { prisonName, month }
-        })
-
-        let basicInfo = null
-        if (results.length > 0) {
-            basicInfo = results[0]
-        } else {
-            // 没有基本信息，创建空对象
-            basicInfo = {
-                report_month: month,
-                user_id: user.id,
-                total_prisoners: 0,
-                major_criminals: 0,
-                death_sentence: 0,
-                life_sentence: 0,
-                repeat_offenders: 0,
-                foreign_prisoners: 0,
-                hk_macao_taiwan: 0,
-                mental_illness: 0,
-                former_officials: 0,
-                former_county_level: 0,
-                falun_gong: 0,
-                drug_history: 0,
-                drug_crimes: 0,
-                new_admissions: 0,
-                minor_females: 0,
-                gang_related: 0,
-                evil_forces: 0,
-                endangering_safety: 0,
-                released_count: 0,
-                recorded_punishments: 0,
-                recorded_punishments_reason: '',
-                confinement_punishments: 0,
-                confinement_reason: ''
-            }
-        }
-
-        // 数据优先级：犯情动态Word > Excel表 > 手动填写
-        // 1. 先尝试从犯情动态获取数据
-        const [criminalReportData] = await sequelize.query(`
-            SELECT * FROM criminal_reports
+            SELECT * 
+            FROM monthly_basic_info
             WHERE prison_name = :prisonName AND report_month = :month
             LIMIT 1
         `, {
             replacements: { prisonName, month }
         })
 
-        if (criminalReportData.length > 0) {
-            // 如果有犯情动态数据，优先使用
-            const report = criminalReportData[0]
-            basicInfo.total_prisoners = report.total_prisoners || basicInfo.total_prisoners
-            basicInfo.major_criminals = report.major_criminal || basicInfo.major_criminals
-            basicInfo.death_sentence = report.death_suspended || basicInfo.death_sentence
-            basicInfo.life_sentence = report.life_sentence || basicInfo.life_sentence
-            basicInfo.repeat_offenders = report.multiple_convictions || basicInfo.repeat_offenders
-            basicInfo.foreign_prisoners = report.foreign_prisoners || basicInfo.foreign_prisoners
-            basicInfo.hk_macao_taiwan = report.hk_macao_taiwan || basicInfo.hk_macao_taiwan
-            basicInfo.mental_illness = report.mental_illness || basicInfo.mental_illness
-            basicInfo.former_officials = report.former_provincial || basicInfo.former_officials
-            basicInfo.former_county_level = report.former_county || basicInfo.former_county_level
-            basicInfo.falun_gong = report.falun_gong || basicInfo.falun_gong
-            basicInfo.drug_history = report.drug_history || basicInfo.drug_history
-            basicInfo.drug_crimes = report.drug_related || basicInfo.drug_crimes
-            basicInfo.new_admissions = report.newly_admitted || basicInfo.new_admissions
-            basicInfo.minor_females = report.juvenile_female || basicInfo.minor_females
-            basicInfo.gang_related = report.gang_related || basicInfo.gang_related
-            basicInfo.evil_forces = report.evil_related || basicInfo.evil_forces
-            basicInfo.endangering_safety = report.dangerous_security || basicInfo.endangering_safety
-            basicInfo.confinement_punishments = report.confinement_count || basicInfo.confinement_punishments
-            basicInfo.recorded_punishments = report.warning_count || basicInfo.recorded_punishments
+        let basicInfo = null
+        let hasManualData = false  // 标记是否有手动编辑的数据
+        
+        if (results.length > 0) {
+            basicInfo = results[0]
+            hasManualData = true  // 数据库中有记录，说明用户手动编辑过
+        } else {
+            // 没有基本信息，自动创建初始化记录（符合"派驻单位+日期"唯一索引规则）
+            console.log(`未找到 ${prisonName} ${month} 的数据，自动创建初始化记录`)
+            
+            await sequelize.query(`
+                INSERT INTO monthly_basic_info (
+                    user_id, prison_name, report_month,
+                    total_prisoners, major_criminals, death_sentence, life_sentence,
+                    repeat_offenders, foreign_prisoners, hk_macao_taiwan, mental_illness,
+                    former_officials, former_county_level, falun_gong, drug_history,
+                    drug_crimes, new_admissions, minor_females, gang_related,
+                    evil_forces, endangering_safety, released_count,
+                    recorded_punishments, recorded_punishments_reason,
+                    confinement_punishments, confinement_reason,
+                    created_at, updated_at
+                ) VALUES (
+                    :userId, :prisonName, :reportMonth,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', 0, '',
+                    NOW(), NOW()
+                )
+            `, {
+                replacements: {
+                    userId: user.id,
+                    prisonName: prisonName,
+                    reportMonth: month
+                }
+            })
+            
+            // 重新查询刚创建的记录
+            const [newResults] = await sequelize.query(`
+                SELECT * 
+                FROM monthly_basic_info
+                WHERE prison_name = :prisonName AND report_month = :month
+                LIMIT 1
+            `, {
+                replacements: { prisonName, month }
+            })
+            
+            basicInfo = newResults[0]
         }
 
-        // 2. 如果没有犯情动态，再统计Excel数据（按派驻单位过滤）
-        const [year, monthNum] = month.split('-')
-        const startDate = `${year}-${monthNum}-01`
-        const endDate = new Date(parseInt(year), parseInt(monthNum), 0).toISOString().split('T')[0]
-
-        // 2.1 统计涉黑涉恶人数（如果犯情动态没有数据，才使用Excel数据）
-        const [blacklistStats] = await sequelize.query(`
-            SELECT 
-                COUNT(CASE WHEN involvement_type LIKE '%涉黑%' THEN 1 END) as gang_count,
-                COUNT(CASE WHEN involvement_type LIKE '%涉恶%' THEN 1 END) as evil_count,
-                COUNT(*) as total_count
-            FROM blacklists
-            WHERE prison_name = :prisonName
-        `, {
-            replacements: { prisonName }
-        })
-
-        // 如果犯情动态没有涉黑涉恶数据，且Excel表有数据，就用Excel表的
-        if (criminalReportData.length === 0 || !criminalReportData[0].gang_related) {
-            if (blacklistStats.length > 0 && blacklistStats[0].total_count > 0) {
-                basicInfo.gang_related = blacklistStats[0].gang_count || 0
-                basicInfo.evil_forces = blacklistStats[0].evil_count || 0
-            }
-        }
-
-        // 2.2 统计禁闭处分人数（本月，如果犯情动态没有数据，才使用Excel数据）
-        const [confinementStats] = await sequelize.query(`
-            SELECT COUNT(DISTINCT prisoner_id) as count
-            FROM confinements
-            WHERE prison_name = :prisonName
-              AND create_date >= :startDate
-              AND create_date <= :endDate
-        `, {
-            replacements: { prisonName, startDate, endDate }
-        })
-
-        // 如果犯情动态没有禁闭数据，且Excel表有数据，就用Excel表的
-        if (criminalReportData.length === 0 || !criminalReportData[0].confinement_count) {
-            if (confinementStats.length > 0 && confinementStats[0].count > 0) {
-                basicInfo.confinement_punishments = confinementStats[0].count || 0
-            }
-        }
-
-        // 2.3 统计记过处分人数（严管教育，如果犯情动态没有数据，才使用Excel数据）
-        const [strictStats] = await sequelize.query(`
-            SELECT COUNT(DISTINCT prisoner_id) as count
-            FROM strict_educations
-            WHERE prison_name = :prisonName
-              AND create_date >= :startDate
-              AND create_date <= :endDate
-        `, {
-            replacements: { prisonName, startDate, endDate }
-        })
-
-        // 如果犯情动态没有记过数据，且Excel表有数据，就用Excel表的
-        if (criminalReportData.length === 0 || !criminalReportData[0].warning_count) {
-            if (strictStats.length > 0 && strictStats[0].count > 0) {
-                basicInfo.recorded_punishments = strictStats[0].count || 0
-            }
-        }
-
-        // 2.4 统计信件数量（如果犯情动态没有数据，才使用Excel数据）
-        const [mailStats] = await sequelize.query(`
-            SELECT COUNT(*) as count
-            FROM mail_records
-            WHERE prison_name = :prisonName
-              AND open_date >= :startDate
-              AND open_date <= :endDate
-        `, {
-            replacements: { prisonName, startDate, endDate }
-        })
-
-        // 如果犯情动态没有信件数据，且Excel表有数据，就用Excel表的
-        if (criminalReportData.length === 0) {
-            if (mailStats.length > 0 && mailStats[0].count > 0) {
-                basicInfo.mail_count = mailStats[0].count || 0
-            }
-        }
+        // 直接返回数据库中的数据
+        // 数据更新方式：
+        // 1. 犯情动态Word上传 → 直接UPDATE
+        // 2. Excel上传 → 直接UPDATE  
+        // 3. 用户手动编辑 → 直接UPDATE
+        // 谁后操作，谁的数据就生效（直接覆盖）
 
         res.json({
             success: true,
-            data: basicInfo,
-            dataSource: criminalReportData.length > 0 ? '犯情动态Word' : (results.length > 0 ? '手动填写+Excel' : 'Excel统计'),
-            message: results.length > 0 ? '数据已加载' : `${month} 月份暂无数据（已统计Excel和犯情动态数据）`
+            data: basicInfo
         })
     } catch (error) {
         console.error('获取月度基本信息失败:', error)
@@ -203,23 +106,30 @@ router.get('/:month', async (req, res) => {
 router.post('/', async (req, res) => {
     try {
         const user = req.user
-        const { report_month, ...basicInfo } = req.body
+        const { report_month, prison_name, ...basicInfo } = req.body
 
         if (!report_month) {
             return res.status(400).json({ error: '缺少report_month参数' })
         }
+        
+        if (!prison_name) {
+            return res.status(400).json({ error: '缺少prison_name参数' })
+        }
 
-        // 检查是否已存在
+        console.log('保存基本信息:', { user_id: user.id, prison_name, report_month })
+
+        // 检查是否已存在（按监狱名称和月份查询）
         const [existing] = await sequelize.query(`
             SELECT id FROM monthly_basic_info 
-            WHERE user_id = :userId AND report_month = :month
+            WHERE prison_name = :prisonName AND report_month = :month
             LIMIT 1
         `, {
-            replacements: { userId: user.id, month: report_month }
+            replacements: { prisonName: prison_name, month: report_month }
         })
 
         if (existing.length > 0) {
             // 更新
+            console.log('更新现有记录, ID:', existing[0].id)
             await sequelize.query(`
                 UPDATE monthly_basic_info SET
                     total_prisoners = :totalPrisoners,
@@ -245,6 +155,28 @@ router.post('/', async (req, res) => {
                     recorded_punishments_reason = :recordedPunishmentsReason,
                     confinement_punishments = :confinementPunishments,
                     confinement_reason = :confinementReason,
+                    letters_received = :lettersReceived,
+                    parole_batch = :paroleBatch,
+                    parole_count = :paroleCount,
+                    parole_stage = :paroleStage,
+                    correction_notices = :correctionNotices,
+                    correction_issues = :correctionIssues,
+                    three_scene_checks = :threeSceneChecks,
+                    key_location_checks = :keyLocationChecks,
+                    visit_checks = :visitChecks,
+                    visit_illegal_count = :visitIllegalCount,
+                    monitor_checks = :monitorChecks,
+                    issues_found = :issuesFound,
+                    total_talks = :totalTalks,
+                    new_admission_talks = :newAdmissionTalks,
+                    evil_forces_talks = :evilForcesTalks,
+                    injury_talks = :injuryTalks,
+                    confinement_talks = :confinementTalks,
+                    questionnaire_count = :questionnaireCount,
+                    life_sentence_reviews = :lifeSentenceReviews,
+                    analysis_meetings = :analysisMeetings,
+                    other_activities = :otherActivities,
+                    mailbox_opens = :mailboxOpens,
                     updated_at = NOW()
                 WHERE id = :id
             `, {
@@ -272,7 +204,29 @@ router.post('/', async (req, res) => {
                     recordedPunishments: basicInfo.recorded_punishments || 0,
                     recordedPunishmentsReason: basicInfo.recorded_punishments_reason || '',
                     confinementPunishments: basicInfo.confinement_punishments || 0,
-                    confinementReason: basicInfo.confinement_reason || ''
+                    confinementReason: basicInfo.confinement_reason || '',
+                    lettersReceived: basicInfo.letters_received || 0,
+                    paroleBatch: basicInfo.parole_batch || '',
+                    paroleCount: basicInfo.parole_count || 0,
+                    paroleStage: basicInfo.parole_stage || '',
+                    correctionNotices: basicInfo.correction_notices || 0,
+                    correctionIssues: basicInfo.correction_issues || '',
+                    threeSceneChecks: basicInfo.three_scene_checks || 0,
+                    keyLocationChecks: basicInfo.key_location_checks || 0,
+                    visitChecks: basicInfo.visit_checks || 0,
+                    visitIllegalCount: basicInfo.visit_illegal_count || 0,
+                    monitorChecks: basicInfo.monitor_checks || 0,
+                    issuesFound: basicInfo.issues_found || 0,
+                    totalTalks: basicInfo.total_talks || 0,
+                    newAdmissionTalks: basicInfo.new_admission_talks || 0,
+                    evilForcesTalks: basicInfo.evil_forces_talks || 0,
+                    injuryTalks: basicInfo.injury_talks || 0,
+                    confinementTalks: basicInfo.confinement_talks || 0,
+                    questionnaireCount: basicInfo.questionnaire_count || 0,
+                    lifeSentenceReviews: basicInfo.life_sentence_reviews || 0,
+                    analysisMeetings: basicInfo.analysis_meetings || 0,
+                    otherActivities: basicInfo.other_activities || '',
+                    mailboxOpens: basicInfo.mailbox_opens || 0
                 }
             })
 
@@ -281,32 +235,50 @@ router.post('/', async (req, res) => {
                 message: '更新成功'
             })
         } else {
-            // 插入
+            // 插入新记录
+            console.log('插入新记录')
             await sequelize.query(`
                 INSERT INTO monthly_basic_info (
-                    user_id, report_month,
+                    user_id, prison_name, report_month,
                     total_prisoners, major_criminals, death_sentence, life_sentence,
                     repeat_offenders, foreign_prisoners, hk_macao_taiwan, mental_illness,
                     former_officials, former_county_level, falun_gong, drug_history,
                     drug_crimes, new_admissions, minor_females, gang_related,
                     evil_forces, endangering_safety, released_count,
                     recorded_punishments, recorded_punishments_reason,
-                    confinement_punishments, confinement_reason,
+                    confinement_punishments, confinement_reason, letters_received,
+                    parole_batch, parole_count, parole_stage,
+                    correction_notices, correction_issues,
+                    three_scene_checks, key_location_checks, visit_checks, visit_illegal_count,
+                    monitor_checks, issues_found,
+                    total_talks, new_admission_talks, evil_forces_talks,
+                    injury_talks, confinement_talks, questionnaire_count,
+                    life_sentence_reviews, analysis_meetings, other_activities,
+                    mailbox_opens,
                     created_at, updated_at
                 ) VALUES (
-                    :userId, :reportMonth,
+                    :userId, :prisonName, :reportMonth,
                     :totalPrisoners, :majorCriminals, :deathSentence, :lifeSentence,
                     :repeatOffenders, :foreignPrisoners, :hkMacaoTaiwan, :mentalIllness,
                     :formerOfficials, :formerCountyLevel, :falunGong, :drugHistory,
                     :drugCrimes, :newAdmissions, :minorFemales, :gangRelated,
                     :evilForces, :endangeringSafety, :releasedCount,
                     :recordedPunishments, :recordedPunishmentsReason,
-                    :confinementPunishments, :confinementReason,
+                    :confinementPunishments, :confinementReason, :lettersReceived,
+                    :paroleBatch, :paroleCount, :paroleStage,
+                    :correctionNotices, :correctionIssues,
+                    :threeSceneChecks, :keyLocationChecks, :visitChecks, :visitIllegalCount,
+                    :monitorChecks, :issuesFound,
+                    :totalTalks, :newAdmissionTalks, :evilForcesTalks,
+                    :injuryTalks, :confinementTalks, :questionnaireCount,
+                    :lifeSentenceReviews, :analysisMeetings, :otherActivities,
+                    :mailboxOpens,
                     NOW(), NOW()
                 )
             `, {
                 replacements: {
                     userId: user.id,
+                    prisonName: prison_name,
                     reportMonth: report_month,
                     totalPrisoners: basicInfo.total_prisoners || 0,
                     majorCriminals: basicInfo.major_criminals || 0,
@@ -330,7 +302,29 @@ router.post('/', async (req, res) => {
                     recordedPunishments: basicInfo.recorded_punishments || 0,
                     recordedPunishmentsReason: basicInfo.recorded_punishments_reason || '',
                     confinementPunishments: basicInfo.confinement_punishments || 0,
-                    confinementReason: basicInfo.confinement_reason || ''
+                    confinementReason: basicInfo.confinement_reason || '',
+                    lettersReceived: basicInfo.letters_received || 0,
+                    paroleBatch: basicInfo.parole_batch || '',
+                    paroleCount: basicInfo.parole_count || 0,
+                    paroleStage: basicInfo.parole_stage || '',
+                    correctionNotices: basicInfo.correction_notices || 0,
+                    correctionIssues: basicInfo.correction_issues || '',
+                    threeSceneChecks: basicInfo.three_scene_checks || 0,
+                    keyLocationChecks: basicInfo.key_location_checks || 0,
+                    visitChecks: basicInfo.visit_checks || 0,
+                    visitIllegalCount: basicInfo.visit_illegal_count || 0,
+                    monitorChecks: basicInfo.monitor_checks || 0,
+                    issuesFound: basicInfo.issues_found || 0,
+                    totalTalks: basicInfo.total_talks || 0,
+                    newAdmissionTalks: basicInfo.new_admission_talks || 0,
+                    evilForcesTalks: basicInfo.evil_forces_talks || 0,
+                    injuryTalks: basicInfo.injury_talks || 0,
+                    confinementTalks: basicInfo.confinement_talks || 0,
+                    questionnaireCount: basicInfo.questionnaire_count || 0,
+                    lifeSentenceReviews: basicInfo.life_sentence_reviews || 0,
+                    analysisMeetings: basicInfo.analysis_meetings || 0,
+                    otherActivities: basicInfo.other_activities || '',
+                    mailboxOpens: basicInfo.mailbox_opens || 0
                 }
             })
 

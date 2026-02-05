@@ -54,7 +54,9 @@ export const useReportStore = defineStore('report', () => {
         recordedPunishments: 0,          // 记过人数
         recordedPunishmentsReason: '',   // 记过原因
         confinementPunishments: 0,       // 禁闭人数
-        confinementReason: ''            // 禁闭原因
+        confinementReason: '',           // 禁闭原因
+        // 信件统计
+        lettersReceived: 0               // 收到信件数量
     })
 
     // ==================== 二、执法检察情况 ====================
@@ -630,6 +632,12 @@ export const useReportStore = defineStore('report', () => {
         }
     }
 
+    // 设置信件数量（从 mail_records 表统计，不受 watch 影响）
+    function setMailCount(count) {
+        otherWork.lettersReceived = count
+        console.log('📧 信件数量已设置:', count)
+    }
+
     // 获取当前报告数据快照（用于导出）
     function getReportSnapshot() {
         const [year, month] = currentMonth.value.split('-')
@@ -745,6 +753,7 @@ export const useReportStore = defineStore('report', () => {
         resetMonthlyData,
         setCurrentMonth,
         recalculateStats,
+        setMailCount,  // 🔥 新增：设置信件数量
         saveBasicInfoToDatabase,
         getReportSnapshot,
         saveToStorage,

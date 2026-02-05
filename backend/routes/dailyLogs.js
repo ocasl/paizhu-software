@@ -161,8 +161,8 @@ router.get('/:id', async (req, res) => {
     }
 })
 
-// 创建日检察记录
-router.post('/', async (req, res) => {
+// 创建日检察记录（仅检察官）
+router.post('/', requireRole(['inspector']), async (req, res) => {
     try {
         // 支持两种命名格式：camelCase 和 snake_case
         const {

@@ -129,7 +129,6 @@ async function handleLogout() {
           <div class="user-info-text">
             <div class="user-details-row">
               <span class="user-name">{{ currentUser.name || '用户' }}</span>
-              <el-divider direction="vertical" />
               <span class="user-role">{{ userRole }}</span>
             </div>
           </div>
@@ -267,38 +266,61 @@ async function handleLogout() {
   transform: translateY(-50%);
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 15px;
 }
 
 .user-info {
   display: flex;
   align-items: center;
-  margin-right: 20px;
 }
 
 .user-info-text {
-  background: rgba(255, 255, 255, 0.95);
-  padding: 12px 20px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(135deg, rgba(30, 144, 255, 0.15) 0%, rgba(30, 144, 255, 0.25) 100%);
+  backdrop-filter: blur(10px);
+  border: 2px solid rgba(255, 215, 0, 0.4);
+  padding: 10px 24px;
+  border-radius: 25px;
+  box-shadow: 
+    0 4px 15px rgba(30, 144, 255, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transition: all 0.3s ease;
+}
+
+.user-info-text:hover {
+  background: linear-gradient(135deg, rgba(30, 144, 255, 0.2) 0%, rgba(30, 144, 255, 0.3) 100%);
+  border-color: rgba(255, 215, 0, 0.6);
+  box-shadow: 
+    0 6px 20px rgba(30, 144, 255, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  transform: translateY(-2px);
 }
 
 .user-details-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 .user-name {
   font-size: 16px;
-  font-weight: 600;
-  color: #303133;
+  font-weight: 700;
+  background: linear-gradient(180deg, #ffd700 0%, #ffaa00 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  letter-spacing: 1px;
 }
 
 .user-role {
-  font-size: 14px;
-  color: #67c23a;
-  font-weight: 500;
+  font-size: 13px;
+  color: #fff;
+  font-weight: 600;
+  background: linear-gradient(135deg, rgba(103, 194, 58, 0.9) 0%, rgba(103, 194, 58, 0.7) 100%);
+  padding: 4px 12px;
+  border-radius: 12px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 2px 6px rgba(103, 194, 58, 0.3);
 }
 
 .action-btn {
@@ -310,17 +332,38 @@ async function handleLogout() {
 }
 
 .action-btn:hover {
-  transform: scale(1.1);
+  transform: scale(1.1) translateY(-2px);
   filter: drop-shadow(0 6px 12px rgba(30, 144, 255, 0.5));
 }
 
 .logout-btn {
   font-weight: 600;
-  box-shadow: 0 4px 8px rgba(245, 108, 108, 0.3);
+  font-size: 14px;
+  padding: 10px 24px;
+  border-radius: 25px;
+  background: linear-gradient(135deg, #f56c6c 0%, #e85d5d 100%);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 
+    0 4px 15px rgba(245, 108, 108, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transition: all 0.3s ease;
+  letter-spacing: 1px;
 }
 
 .logout-btn:hover {
-  box-shadow: 0 6px 12px rgba(245, 108, 108, 0.5);
+  background: linear-gradient(135deg, #e85d5d 0%, #d94545 100%);
+  box-shadow: 
+    0 6px 20px rgba(245, 108, 108, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transform: translateY(-2px);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.logout-btn:active {
+  transform: translateY(0);
+  box-shadow: 
+    0 2px 8px rgba(245, 108, 108, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
 /* 中心工作概览 */

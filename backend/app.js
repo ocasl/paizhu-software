@@ -26,6 +26,8 @@ const tabletSyncRoutes = require('./routes/tabletSync')
 const dataManagementRoutes = require('./routes/dataManagement')
 const monthlyBasicInfoRoutes = require('./routes/monthlyBasicInfo')
 const prisonsRoutes = require('./routes/prisons')
+const checklistItemsRoutes = require('./routes/checklistItems')
+const compilationRoutes = require('./routes/compilation')
 
 const app = express()
 const PORT = process.env.PORT || 3000
@@ -62,6 +64,8 @@ app.use('/api/tablet-sync', tabletSyncRoutes)
 app.use('/api/data-management', dataManagementRoutes)
 app.use('/api/monthly-basic-info', monthlyBasicInfoRoutes)
 app.use('/api/prisons', prisonsRoutes)
+app.use('/api/checklist-items', checklistItemsRoutes)
+app.use('/api/compilation', compilationRoutes)
 
 // 健康检查
 app.get('/api/health', (req, res) => {

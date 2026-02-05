@@ -90,6 +90,15 @@ const routes = [
         }
     },
     {
+        path: '/compilation',
+        name: 'Compilation',
+        component: () => import('../views/Compilation.vue'),
+        meta: {
+            title: '汇编',
+            roles: ['admin', 'inspector', 'leader', 'top_viewer']  // 所有角色都可以访问
+        }
+    },
+    {
         path: '/settings',
         name: 'Settings',
         component: () => import('../views/AdminUsers.vue'),
