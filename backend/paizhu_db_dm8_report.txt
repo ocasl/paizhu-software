@@ -1,0 +1,32 @@
+达梦数据库转换报告
+================================================================================
+转换时间: 2026/2/5 13:01:24
+源文件: E:\CODE\paizhu-software\backend\paizhu_db.sql
+目标文件: E:\CODE\paizhu-software\backend\paizhu_db_dm8.sql
+转换表数量: 16
+生成序列数: 16
+
+注意事项：
+1. JSON 字段已转换为 TEXT 类型，需要在应用层处理序列化
+2. ENUM 字段已转换为 VARCHAR + CHECK 约束
+3. AUTO_INCREMENT 已转换为序列（SEQUENCE）
+4. 请在达梦数据库中测试执行
+5. 建议先在测试环境验证
+
+生成的序列：
+1. CREATE SEQUENCE seq_attachments_id START WITH 1 INCREMENT BY 1;
+2. CREATE SEQUENCE seq_blacklists_id START WITH 1 INCREMENT BY 1;
+3. CREATE SEQUENCE seq_confinements_id START WITH 1 INCREMENT BY 1;
+4. CREATE SEQUENCE seq_criminal_reports_id START WITH 1 INCREMENT BY 1;
+5. CREATE SEQUENCE seq_daily_logs_id START WITH 1 INCREMENT BY 1;
+6. CREATE SEQUENCE seq_immediate_events_id START WITH 1 INCREMENT BY 1;
+7. CREATE SEQUENCE seq_mail_records_id START WITH 1 INCREMENT BY 1;
+8. CREATE SEQUENCE seq_monthly_archives_id START WITH 1 INCREMENT BY 1;
+9. CREATE SEQUENCE seq_monthly_basic_info_id START WITH 1 INCREMENT BY 1;
+10. CREATE SEQUENCE seq_monthly_records_id START WITH 1 INCREMENT BY 1;
+11. CREATE SEQUENCE seq_prisoners_id START WITH 1 INCREMENT BY 1;
+12. CREATE SEQUENCE seq_restraint_usages_id START WITH 1 INCREMENT BY 1;
+13. CREATE SEQUENCE seq_strict_educations_id START WITH 1 INCREMENT BY 1;
+14. CREATE SEQUENCE seq_user_prison_scopes_id START WITH 1 INCREMENT BY 1;
+15. CREATE SEQUENCE seq_users_id START WITH 1 INCREMENT BY 1;
+16. CREATE SEQUENCE seq_weekly_records_id START WITH 1 INCREMENT BY 1;
